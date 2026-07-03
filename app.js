@@ -1,18 +1,35 @@
-/* Emotie Kwadrant — herbouw van de design handoff als vanilla-JS PWA.
-   Logica 1-op-1 geport uit "Emotie Kwadrant.dc.html". */
+/* Emotie Kwadrant — drie-lagen-logging (kwadrant → emotie → factoren).
+   Vanilla JS PWA, geen buildstap. */
 (function () {
   'use strict';
 
   var KEY = 'emokwadrant.entries.v1';
-  // Interne 'key' blijft ongewijzigd zodat bestaande logs + kleuren behouden blijven;
-  // alleen de weergavenaam ('label') en de korte code ('kort') zijn aangepast.
-  // Assen: verticaal aan(boven)/uit(onder), horizontaal duw(links)/trek(rechts).
+
+  // Kwadranten. Interne 'key' blijft ongewijzigd zodat bestaande logs + kleuren
+  // behouden blijven. Assen (impliciet): verticaal aan/uit, horizontaal duw/trek.
   var EMO = [
     { key: 'forceren', label: 'Beuken',     kort: 'BEU', hue: 25 },   // aan + duw
     { key: 'bouwen',   label: 'Bouwen',     kort: 'BOU', hue: 150 },  // aan + trek
     { key: 'wegzakken',label: 'Wegkwijnen', kort: 'WEG', hue: 290 },  // uit + duw
     { key: 'opladen',  label: 'Ontspannen', kort: 'ONT', hue: 220 }   // uit + trek
   ];
+
+  // Laag 2: specifieke emoties per kwadrant (voorlopige voorbeelden — later te vervangen).
+  var EMOTIONS = {
+    forceren:  ['Gefrustreerd', 'Geïrriteerd', 'Opgejaagd', 'Verbeten'],
+    bouwen:    ['Geïnspireerd', 'Gefocust', 'Gedreven', 'Enthousiast'],
+    wegzakken: ['Lusteloos', 'Verveeld', 'Futloos', 'Somber'],
+    opladen:   ['Kalm', 'Tevreden', 'Voldaan', 'Rustig']
+  };
+
+  // Laag 3: factoren die de staat kunnen beïnvloeden (schaal 0–5, 0 = niet ingesteld).
+  var FACTORS = [
+    { key: 'slaap', label: 'Slaap' },
+    { key: 'eten', label: 'Eten' },
+    { key: 'wiet', label: 'Wiet' },
+    { key: 'planning', label: 'Planning' }
+  ];
+
   var HUE = {}, LABEL = {};
   EMO.forEach(function (e) { HUE[e.key] = e.hue; LABEL[e.key] = e.label; });
 
@@ -21,10 +38,12 @@
   function line(hue) { return 'oklch(72% 0.085 ' + hue + ' / 0.3)'; }
   function colorForKey(k) { return color(HUE[k]); }
 
-  /* ---------- State + persistentie ---------- */
+  /* ---------- State ---------- */
   var entries = [];
-  var screen = 'log';      // 'log' | 'ins'
-  var pendingId = null;    // entry in bevestigingsscherm
+  var screen = 'log';   // bottom-nav: 'log' | 'ins'
+  // Lopende log-flow (concept, nog niet opgeslagen). null als er geen flow actief is.
+  //   { step: 'pick' | 'factors', key, emotion, ts, factors:{slaap,eten,wiet,planning}, note }
+  var flow = null;
 
   function load() {
     try { entries = JSON.parse(localStorage.getItem(KEY) || '[]'); } catch (e) { entries = []; }
@@ -32,10 +51,6 @@
   }
   function persist() {
     try { localStorage.setItem(KEY, JSON.stringify(entries)); } catch (e) {}
-  }
-  function pend() {
-    for (var i = 0; i < entries.length; i++) if (entries[i].id === pendingId) return entries[i];
-    return null;
   }
 
   /* ---------- Mini DOM-helper ---------- */
@@ -77,34 +92,51 @@
     return dd.toLocaleDateString('nl-NL', { weekday: 'short', day: 'numeric', month: 'short' });
   }
 
-  /* ---------- Acties ---------- */
-  function tap(key) {
-    var entry = { id: 'e-' + Date.now() + '-' + Math.floor(Math.random() * 1e6), key: key, ts: Date.now(), intensity: 0, note: '' };
-    entries.push(entry);
-    persist();
-    pendingId = entry.id;
+  /* ---------- Log-flow ---------- */
+  var noteInput = null; // ref naar het notitieveld op het factoren-scherm
+
+  function syncNote() {
+    if (flow && noteInput) flow.note = noteInput.value || '';
+  }
+  function startFlow(key) {
+    flow = { step: 'pick', key: key, emotion: null, ts: Date.now(),
+      factors: { slaap: 0, eten: 0, wiet: 0, planning: 0 }, note: '' };
     render();
   }
-  function setInt(n) {
-    var p = pend();
-    if (!p) return;
-    p.intensity = p.intensity === n ? 0 : n;
-    persist();
-    updateIntens();
+  function pickEmotion(name) {
+    flow.emotion = name;
+    flow.step = 'factors';
+    render();
   }
-  function close(saveNote) {
-    var p = pend();
-    if (p && saveNote && noteInput) {
-      p.note = (noteInput.value || '').trim();
-      persist();
-    }
-    pendingId = null;
+  function back() {
+    if (!flow) return;
+    if (flow.step === 'factors') { syncNote(); flow.step = 'pick'; }
+    else { flow = null; }
     noteInput = null;
-    intensContainer = null;
+    render();
+  }
+  function commit(saveNote) {
+    if (!flow) return;
+    syncNote();
+    var entry = {
+      id: 'e-' + Date.now() + '-' + Math.floor(Math.random() * 1e6),
+      key: flow.key,
+      emotion: flow.emotion,
+      ts: flow.ts,
+      factors: {
+        slaap: flow.factors.slaap, eten: flow.factors.eten,
+        wiet: flow.factors.wiet, planning: flow.factors.planning
+      },
+      note: saveNote ? (flow.note || '').trim() : ''
+    };
+    entries.push(entry);
+    persist();
+    flow = null;
+    noteInput = null;
     render();
   }
 
-  /* ---------- Logscherm ---------- */
+  /* ---------- Laag 1: kwadrant-rooster ---------- */
   function todayStr() {
     return new Date().toLocaleDateString('nl-NL', { weekday: 'long', day: 'numeric', month: 'long' });
   }
@@ -114,35 +146,132 @@
     return n === 0 ? 'nog niets gelogd' : n === 1 ? '1 log vandaag' : n + ' logs vandaag';
   }
   function renderLog() {
-    var grid = h('div', { class: 'grid' }, EMO.map(function (e) {
-      return h('button', {
-        class: 'tile',
-        style: { background: bg(e.hue, 0.09), border: '1px solid ' + line(e.hue) },
-        onclick: function () { tap(e.key); }
-      }, [
-        h('span', { class: 'tile-label', style: { color: color(e.hue) }, text: e.label })
-      ]);
-    }));
-    // Twee assen rondom het kwadrant: verticaal aan/uit, horizontaal duw/trek.
-    var kwadrant = h('div', { class: 'kwadrant' }, [
-      h('div', { class: 'axis-label axis-top', text: 'aan' }),
-      h('div', { class: 'axis-mid' }, [
-        h('div', { class: 'axis-label axis-side axis-left', text: 'duw' }),
-        grid,
-        h('div', { class: 'axis-label axis-side axis-right', text: 'trek' })
-      ]),
-      h('div', { class: 'axis-label axis-bottom', text: 'uit' })
-    ]);
     return h('div', { class: 'log-screen' }, [
       h('div', { class: 'log-head' }, [
         h('div', { class: 'today', text: todayStr() }),
         h('div', { class: 'today-count', text: todayCountStr() })
       ]),
-      kwadrant
+      h('div', { class: 'grid' }, EMO.map(function (e) {
+        return h('button', {
+          class: 'tile',
+          style: { background: bg(e.hue, 0.09), border: '1px solid ' + line(e.hue) },
+          onclick: function () { startFlow(e.key); }
+        }, [
+          h('span', { class: 'tile-label', style: { color: color(e.hue) }, text: e.label })
+        ]);
+      }))
     ]);
   }
 
-  /* ---------- Inzichtenscherm ---------- */
+  /* ---------- Laag 2: emotie-kiezer ---------- */
+  function renderPick() {
+    var c = colorForKey(flow.key);
+    return h('div', { class: 'screen-overlay' }, [
+      h('button', { class: 'back-btn', text: '‹ terug', onclick: back }),
+      h('div', { class: 'ov-head' }, [
+        h('span', { class: 'ov-dot', style: { background: c } }),
+        h('div', { class: 'ov-title', style: { color: c }, text: LABEL[flow.key] }),
+        h('div', { class: 'ov-sub', text: 'waar zit je nu?' })
+      ]),
+      h('div', { class: 'picker-list' }, (EMOTIONS[flow.key] || []).map(function (name) {
+        return h('button', {
+          class: 'emotion-item',
+          style: { background: bg(HUE[flow.key], 0.09), border: '1px solid ' + line(HUE[flow.key]), color: c },
+          onclick: function () { pickEmotion(name); }
+        }, [name]);
+      }))
+    ]);
+  }
+
+  /* ---------- Laag 3: factoren + notitie ---------- */
+  function buildSlider(factorKey, colorStr, readout) {
+    var track = h('div', { class: 'slider-track' });
+    var fill = h('div', { class: 'slider-fill' });
+    var thumb = h('div', { class: 'slider-thumb' });
+    // 5 stops (1–5) als kleine tikjes; 0 = links, niet ingesteld.
+    for (var s = 1; s <= 5; s++) {
+      track.appendChild(h('div', { class: 'slider-tick', style: { left: (s / 5 * 100) + '%' } }));
+    }
+    track.appendChild(fill);
+    track.appendChild(thumb);
+
+    function paint(v) {
+      var frac = v / 5;
+      fill.style.width = (frac * 100) + '%';
+      thumb.style.left = (frac * 100) + '%';
+      if (v === 0) {
+        thumb.style.opacity = '0';
+        fill.style.background = 'transparent';
+      } else {
+        thumb.style.opacity = '1';
+        fill.style.background = colorStr;
+        thumb.style.background = colorStr;
+      }
+      readout.textContent = v === 0 ? '–' : String(v);
+    }
+    paint(flow.factors[factorKey]);
+
+    function valAt(clientX) {
+      var r = track.getBoundingClientRect();
+      var frac = (clientX - r.left) / r.width;
+      frac = Math.max(0, Math.min(1, frac));
+      return Math.round(frac * 5); // 0–5, snapt op elke stap
+    }
+    function apply(v) { flow.factors[factorKey] = v; paint(v); }
+
+    var dragging = false;
+    track.addEventListener('pointerdown', function (e) {
+      dragging = true;
+      try { track.setPointerCapture(e.pointerId); } catch (err) {}
+      apply(valAt(e.clientX));
+    });
+    track.addEventListener('pointermove', function (e) { if (dragging) apply(valAt(e.clientX)); });
+    function end() { dragging = false; }
+    track.addEventListener('pointerup', end);
+    track.addEventListener('pointercancel', end);
+
+    return h('div', { class: 'slider' }, [track]);
+  }
+
+  function renderFactors() {
+    var c = colorForKey(flow.key);
+    noteInput = h('input', { class: 'note-input', placeholder: 'notitie (optioneel)', value: flow.note || '' });
+
+    var factorRows = FACTORS.map(function (f) {
+      var readout = h('span', { class: 'factor-val' });
+      var head = h('div', { class: 'factor-head' }, [
+        h('span', { class: 'factor-name', text: f.label }),
+        readout
+      ]);
+      return h('div', { class: 'factor-row' }, [head, buildSlider(f.key, c, readout)]);
+    });
+
+    return h('div', { class: 'screen-overlay' }, [
+      h('button', { class: 'back-btn', text: '‹ terug', onclick: back }),
+      h('div', { class: 'ov-head' }, [
+        h('span', { class: 'ov-dot', style: { background: c } }),
+        h('div', { class: 'ov-title', style: { color: c }, text: flow.emotion || LABEL[flow.key] }),
+        h('div', { class: 'ov-sub', text: LABEL[flow.key].toLowerCase() + ' · ' + fmtTime(flow.ts) })
+      ]),
+      h('div', { class: 'factors' }, factorRows),
+      noteInput,
+      h('div', { class: 'confirm-actions' }, [
+        h('button', { class: 'btn-skip', text: 'overslaan', onclick: function () { commit(false); } }),
+        h('button', { class: 'btn-done', text: 'klaar', onclick: function () { commit(true); } })
+      ])
+    ]);
+  }
+
+  /* ---------- Inzichten ---------- */
+  function factorSummary(e) {
+    if (!e.factors) return '';
+    var parts = [];
+    FACTORS.forEach(function (f) {
+      var v = e.factors[f.key];
+      if (v) parts.push(f.label.toLowerCase() + ' ' + v);
+    });
+    return parts.join(' · ');
+  }
   function computeWeekBars() {
     var dayNames = ['zo', 'ma', 'di', 'wo', 'do', 'vr', 'za'];
     var days = [];
@@ -203,8 +332,8 @@
       if (cur.items.length < 10) cur.items.push({
         time: fmtTime(e.ts),
         color: colorForKey(e.key),
-        label: LABEL[e.key],
-        dots: e.intensity ? new Array(e.intensity + 1).join('•') : '',
+        label: e.emotion || LABEL[e.key],
+        detail: factorSummary(e),
         note: e.note || '',
         hasNote: !!(e.note && e.note.length)
       });
@@ -218,7 +347,6 @@
   function renderIns() {
     var box = h('div', { class: 'ins-screen' });
 
-    // deze week
     box.appendChild(secHead('deze week', '0 0 24px'));
     var weekBars = computeWeekBars();
     box.appendChild(h('div', { class: 'week-bars' }, weekBars.map(function (wb) {
@@ -236,7 +364,6 @@
       ]);
     })));
 
-    // per dagdeel
     box.appendChild(secHead('per dagdeel', '0 0 4px'));
     box.appendChild(h('div', { class: 'part-headrow' }, [h('span', { class: 'part-spacer' })].concat(
       EMO.map(function (e) { return h('span', { class: 'part-col-head', style: { color: color(e.hue) }, text: e.kort }); })
@@ -251,7 +378,6 @@
       )));
     });
 
-    // tijdlijn
     box.appendChild(secHead('tijdlijn', '34px 0 6px'));
     if (entries.length === 0) {
       box.appendChild(h('div', { class: 'tl-empty', text: 'Nog geen logs.' }));
@@ -263,10 +389,10 @@
           h('div', { class: 'tl-row' }, [
             h('span', { class: 'tl-time', text: it.time }),
             h('span', { class: 'tl-dot', style: { background: it.color } }),
-            h('span', { class: 'tl-label', text: it.label }),
-            h('span', { class: 'tl-dots', style: { color: it.color }, text: it.dots })
+            h('span', { class: 'tl-label', text: it.label })
           ])
         ]);
+        if (it.detail) item.appendChild(h('div', { class: 'tl-meta', text: it.detail }));
         if (it.hasNote) item.appendChild(h('div', { class: 'tl-note', text: it.note }));
         box.appendChild(item);
       });
@@ -285,56 +411,13 @@
     ]);
   }
 
-  /* ---------- Bevestigingsscherm ---------- */
-  var noteInput = null;
-  var intensContainer = null;
-
-  function intensButtons(p) {
-    var c = colorForKey(p.key);
-    return [1, 2, 3, 4, 5].map(function (n) {
-      var on = p.intensity === n;
-      return h('button', {
-        class: 'intens-btn',
-        style: {
-          border: '1px solid ' + (on ? c : 'rgba(255,255,255,.16)'),
-          background: on ? c : 'transparent',
-          color: on ? '#0B0C0D' : '#9AA0A3'
-        },
-        text: String(n),
-        onclick: function () { setInt(n); }
-      });
-    });
-  }
-  function updateIntens() {
-    var p = pend();
-    if (!p || !intensContainer) return;
-    intensContainer.replaceChildren.apply(intensContainer, intensButtons(p));
-  }
-  function renderConfirm(p) {
-    var c = colorForKey(p.key);
-    intensContainer = h('div', { class: 'intens' }, intensButtons(p));
-    noteInput = h('input', { class: 'note-input', placeholder: 'notitie (optioneel)', value: p.note || '' });
-    return h('div', { class: 'confirm' }, [
-      h('span', { class: 'confirm-dot', style: { background: c } }),
-      h('div', { class: 'confirm-title', style: { color: c }, text: LABEL[p.key] }),
-      h('div', { class: 'confirm-time', text: 'gelogd om ' + fmtTime(p.ts) }),
-      intensContainer,
-      noteInput,
-      h('div', { class: 'confirm-actions' }, [
-        h('button', { class: 'btn-skip', text: 'overslaan', onclick: function () { close(false); } }),
-        h('button', { class: 'btn-done', text: 'klaar', onclick: function () { close(true); } })
-      ])
-    ]);
-  }
-
   /* ---------- Render ---------- */
   var root;
   function render() {
     root.replaceChildren();
     root.appendChild(screen === 'log' ? renderLog() : renderIns());
     root.appendChild(renderNav());
-    var p = pend();
-    if (p) root.appendChild(renderConfirm(p));
+    if (flow) root.appendChild(flow.step === 'pick' ? renderPick() : renderFactors());
   }
 
   document.addEventListener('DOMContentLoaded', function () {
