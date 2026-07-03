@@ -4,11 +4,14 @@
   'use strict';
 
   var KEY = 'emokwadrant.entries.v1';
+  // Interne 'key' blijft ongewijzigd zodat bestaande logs + kleuren behouden blijven;
+  // alleen de weergavenaam ('label') en de korte code ('kort') zijn aangepast.
+  // Assen: verticaal aan(boven)/uit(onder), horizontaal duw(links)/trek(rechts).
   var EMO = [
-    { key: 'forceren', label: 'Forceren', kort: 'FOR', desc: 'actie vanuit frustratie', hue: 25 },
-    { key: 'bouwen',   label: 'Bouwen',   kort: 'BOU', desc: 'werken aan iets waardevols', hue: 150 },
-    { key: 'wegzakken',label: 'Wegzakken',kort: 'WEG', desc: 'vermijden, scrollen, uitstellen', hue: 290 },
-    { key: 'opladen',  label: 'Opladen',  kort: 'OPL', desc: 'bewuste rust, zonder onrust', hue: 220 }
+    { key: 'forceren', label: 'Beuken',     kort: 'BEU', hue: 25 },   // aan + duw
+    { key: 'bouwen',   label: 'Bouwen',     kort: 'BOU', hue: 150 },  // aan + trek
+    { key: 'wegzakken',label: 'Wegkwijnen', kort: 'WEG', hue: 290 },  // uit + duw
+    { key: 'opladen',  label: 'Ontspannen', kort: 'ONT', hue: 220 }   // uit + trek
   ];
   var HUE = {}, LABEL = {};
   EMO.forEach(function (e) { HUE[e.key] = e.hue; LABEL[e.key] = e.label; });
@@ -111,21 +114,31 @@
     return n === 0 ? 'nog niets gelogd' : n === 1 ? '1 log vandaag' : n + ' logs vandaag';
   }
   function renderLog() {
+    var grid = h('div', { class: 'grid' }, EMO.map(function (e) {
+      return h('button', {
+        class: 'tile',
+        style: { background: bg(e.hue, 0.09), border: '1px solid ' + line(e.hue) },
+        onclick: function () { tap(e.key); }
+      }, [
+        h('span', { class: 'tile-label', style: { color: color(e.hue) }, text: e.label })
+      ]);
+    }));
+    // Twee assen rondom het kwadrant: verticaal aan/uit, horizontaal duw/trek.
+    var kwadrant = h('div', { class: 'kwadrant' }, [
+      h('div', { class: 'axis-label axis-top', text: 'aan' }),
+      h('div', { class: 'axis-mid' }, [
+        h('div', { class: 'axis-label axis-side axis-left', text: 'duw' }),
+        grid,
+        h('div', { class: 'axis-label axis-side axis-right', text: 'trek' })
+      ]),
+      h('div', { class: 'axis-label axis-bottom', text: 'uit' })
+    ]);
     return h('div', { class: 'log-screen' }, [
       h('div', { class: 'log-head' }, [
         h('div', { class: 'today', text: todayStr() }),
         h('div', { class: 'today-count', text: todayCountStr() })
       ]),
-      h('div', { class: 'grid' }, EMO.map(function (e) {
-        return h('button', {
-          class: 'tile',
-          style: { background: bg(e.hue, 0.09), border: '1px solid ' + line(e.hue) },
-          onclick: function () { tap(e.key); }
-        }, [
-          h('span', { class: 'tile-label', style: { color: color(e.hue) }, text: e.label }),
-          h('span', { class: 'tile-desc', text: e.desc })
-        ]);
-      }))
+      kwadrant
     ]);
   }
 

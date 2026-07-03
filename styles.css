@@ -38,10 +38,23 @@ input::placeholder { color: #565C60; }
 .today { font: 400 11.5px 'IBM Plex Mono', monospace; color: #565C60; }
 .today-count { font: 400 10.5px 'IBM Plex Mono', monospace; color: #3E4448; }
 
+/* Twee assen rondom het kwadrant */
+.kwadrant { display: flex; flex-direction: column; align-items: center; }
+.axis-label {
+  font: 400 11px 'IBM Plex Mono', monospace;
+  color: #565C60;
+  letter-spacing: .14em;
+}
+.axis-top { margin-bottom: 12px; }
+.axis-bottom { margin-top: 12px; }
+.axis-mid { display: flex; align-items: center; gap: 8px; }
+.axis-side { writing-mode: vertical-rl; }
+.axis-left { transform: rotate(180deg); }
+
 .grid {
   display: grid;
-  grid-template-columns: min(160px, 42vw) min(160px, 42vw);
-  grid-template-rows: min(160px, 42vw) min(160px, 42vw);
+  grid-template-columns: min(140px, 36vw) min(140px, 36vw);
+  grid-template-rows: min(140px, 36vw) min(140px, 36vw);
   gap: 18px;
 }
 .tile {
@@ -62,7 +75,6 @@ input::placeholder { color: #565C60; }
 }
 .tile:active { transform: scale(0.96); }
 .tile-label { font: 500 17px 'IBM Plex Sans', sans-serif; }
-.tile-desc { font-size: 10.5px; line-height: 1.35; color: #6C7377; text-align: center; }
 
 /* ---------- Inzichtenscherm ---------- */
 .ins-screen {

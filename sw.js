@@ -1,6 +1,6 @@
 /* Emotie Kwadrant — service worker.
    Cache-first app-shell + runtime-cache voor Google Fonts (offline gebruik). */
-var VERSION = 'kwadrant-v1';
+var VERSION = 'kwadrant-v2';
 var SHELL = 'shell-' + VERSION;
 var FONTS = 'fonts-' + VERSION;
 
