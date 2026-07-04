@@ -14,20 +14,38 @@
     { key: 'opladen',  label: 'Ontspannen', kort: 'ONT', hue: 220 }   // uit + trek
   ];
 
-  // Laag 2: specifieke emoties per kwadrant (voorlopige voorbeelden — later te vervangen).
+  // Laag 2: specifieke emoties per kwadrant. Elk kwadrant is zelf óók een kwadrant:
+  // volgorde = [linksboven, rechtsboven, linksonder, rechtsonder]
+  // (verticale as aan/uit, horizontale as duw/trek).
   var EMOTIONS = {
-    forceren:  ['Gefrustreerd', 'Geïrriteerd', 'Opgejaagd', 'Verbeten'],
-    bouwen:    ['Geïnspireerd', 'Gefocust', 'Gedreven', 'Enthousiast'],
-    wegzakken: ['Lusteloos', 'Verveeld', 'Futloos', 'Somber'],
-    opladen:   ['Kalm', 'Tevreden', 'Voldaan', 'Rustig']
+    forceren:  ['Forceren', 'Doorzetten', 'Chaotisch', 'Werkmodus'],
+    bouwen:    ['Actieve modus', 'Flow', 'Excited zacht', 'Excited hard'],
+    opladen:   ['Volwaardig', 'Actieve zelfwaardering', 'Actieve ontspanning', 'Opladen'],
+    wegzakken: ['Zelfafwijzing', 'Zelf struggle', 'Verdoven', 'Fantaseren']
   };
 
-  // Laag 3: factoren die de staat kunnen beïnvloeden (schaal 0–5, 0 = niet ingesteld).
+  // Laag 3: factoren die de staat kunnen beïnvloeden. Schaal 1–5; null = niet ingesteld.
   var FACTORS = [
     { key: 'slaap', label: 'Slaap' },
+    { key: 'stress', label: 'Stress' },
     { key: 'eten', label: 'Eten' },
     { key: 'wiet', label: 'Wiet' },
+    { key: 'alcohol', label: 'Alcohol' },
     { key: 'planning', label: 'Planning' }
+  ];
+
+  // Laag 4: principes + tools per gekozen emotie. Placeholders — later te vervangen
+  // (o.a. eigen iconen + echte principes/tools). PRINCIPES nu generiek per staat.
+  var PRINCIPES = [
+    'Erken de staat waar je in zit — hij geeft informatie.',
+    'Je gedrag volgt uit je staat, niet andersom.',
+    'Eén kleine, passende actie kan de staat verschuiven.'
+  ];
+  var TOOLS = [
+    { icon: '📝', label: 'Emotieregulatie-vragenlijst', sub: 'kort invullen' },
+    { icon: '📅', label: 'Dagplanning maken', sub: 'structuur aanbrengen' },
+    { icon: '🧩', label: 'Flow-structuur uitdenken', sub: 'stap voor stap' },
+    { icon: '⏱️', label: 'Pauze-timer 20 min', sub: 'even eruit' }
   ];
 
   var HUE = {}, LABEL = {};
@@ -41,8 +59,11 @@
   /* ---------- State ---------- */
   var entries = [];
   var screen = 'log';   // bottom-nav: 'log' | 'ins'
-  // Lopende log-flow (concept, nog niet opgeslagen). null als er geen flow actief is.
-  //   { step: 'pick' | 'factors', key, emotion, ts, factors:{slaap,eten,wiet,planning}, note }
+  // Lopende log-flow. null als er geen flow actief is.
+  //   { step: 'pick' | 'factors' | 'tools', key, emotion, ts,
+  //     factors:{<factor>:1..5|null}, note, savedId }
+  // De entry wordt opgeslagen bij de overgang factoren → tools (savedId onthoudt
+  // welke, zodat terug/vooruit dezelfde entry bijwerkt i.p.v. dubbel logt).
   var flow = null;
 
   function load() {
@@ -99,8 +120,10 @@
     if (flow && noteInput) flow.note = noteInput.value || '';
   }
   function startFlow(key) {
+    var factors = {};
+    FACTORS.forEach(function (f) { factors[f.key] = null; });
     flow = { step: 'pick', key: key, emotion: null, ts: Date.now(),
-      factors: { slaap: 0, eten: 0, wiet: 0, planning: 0 }, note: '' };
+      factors: factors, note: '', savedId: null };
     render();
   }
   function pickEmotion(name) {
@@ -110,27 +133,38 @@
   }
   function back() {
     if (!flow) return;
-    if (flow.step === 'factors') { syncNote(); flow.step = 'pick'; }
+    if (flow.step === 'tools') { flow.step = 'factors'; }
+    else if (flow.step === 'factors') { syncNote(); flow.step = 'pick'; }
     else { flow = null; }
     noteInput = null;
     render();
   }
-  function commit(saveNote) {
+  // Factoren → tools: sla de entry op (of werk 'm bij bij terug/vooruit) en ga door.
+  function saveAndAdvance(saveNote) {
     if (!flow) return;
     syncNote();
-    var entry = {
-      id: 'e-' + Date.now() + '-' + Math.floor(Math.random() * 1e6),
-      key: flow.key,
-      emotion: flow.emotion,
-      ts: flow.ts,
-      factors: {
-        slaap: flow.factors.slaap, eten: flow.factors.eten,
-        wiet: flow.factors.wiet, planning: flow.factors.planning
-      },
-      note: saveNote ? (flow.note || '').trim() : ''
-    };
-    entries.push(entry);
+    var factors = {};
+    FACTORS.forEach(function (f) { factors[f.key] = flow.factors[f.key]; });
+    var note = saveNote ? (flow.note || '').trim() : '';
+    if (flow.savedId) {
+      var ex = entries.filter(function (e) { return e.id === flow.savedId; })[0];
+      if (ex) { ex.factors = factors; ex.note = note; }
+    } else {
+      var entry = {
+        id: 'e-' + Date.now() + '-' + Math.floor(Math.random() * 1e6),
+        key: flow.key, emotion: flow.emotion, ts: flow.ts,
+        factors: factors, note: note
+      };
+      entries.push(entry);
+      flow.savedId = entry.id;
+    }
     persist();
+    flow.step = 'tools';
+    noteInput = null;
+    render();
+  }
+  // Tools-scherm afsluiten (entry is al opgeslagen bij saveAndAdvance).
+  function finishFlow() {
     flow = null;
     noteInput = null;
     render();
@@ -173,9 +207,9 @@
         h('div', { class: 'ov-title', style: { color: c }, text: LABEL[flow.key] }),
         h('div', { class: 'ov-sub', text: 'waar zit je nu?' })
       ]),
-      h('div', { class: 'picker-list' }, (EMOTIONS[flow.key] || []).map(function (name) {
+      h('div', { class: 'picker-grid' }, (EMOTIONS[flow.key] || []).map(function (name) {
         return h('button', {
-          class: 'emotion-item',
+          class: 'emotion-tile',
           style: { background: bg(HUE[flow.key], 0.09), border: '1px solid ' + line(HUE[flow.key]), color: c },
           onclick: function () { pickEmotion(name); }
         }, [name]);
@@ -188,34 +222,38 @@
     var track = h('div', { class: 'slider-track' });
     var fill = h('div', { class: 'slider-fill' });
     var thumb = h('div', { class: 'slider-thumb' });
-    // 5 stops (1–5) als kleine tikjes; 0 = links, niet ingesteld.
+    // 5 stops (1–5) als kleine tikjes.
     for (var s = 1; s <= 5; s++) {
       track.appendChild(h('div', { class: 'slider-tick', style: { left: (s / 5 * 100) + '%' } }));
     }
     track.appendChild(fill);
     track.appendChild(thumb);
 
+    // v === null: nog niet ingesteld (leeg). Anders 1..5.
     function paint(v) {
+      if (v == null) {
+        fill.style.width = '0%';
+        thumb.style.opacity = '0';
+        fill.style.background = 'transparent';
+        readout.textContent = '–';
+        return;
+      }
       var frac = v / 5;
       fill.style.width = (frac * 100) + '%';
       thumb.style.left = (frac * 100) + '%';
-      if (v === 0) {
-        thumb.style.opacity = '0';
-        fill.style.background = 'transparent';
-      } else {
-        thumb.style.opacity = '1';
-        fill.style.background = colorStr;
-        thumb.style.background = colorStr;
-      }
-      readout.textContent = v === 0 ? '–' : String(v);
+      thumb.style.opacity = '1';
+      fill.style.background = colorStr;
+      thumb.style.background = colorStr;
+      readout.textContent = String(v);
     }
     paint(flow.factors[factorKey]);
 
+    // Minimaal 1: helemaal naar links geven = 1, nooit 0/leeg via slepen.
     function valAt(clientX) {
       var r = track.getBoundingClientRect();
       var frac = (clientX - r.left) / r.width;
       frac = Math.max(0, Math.min(1, frac));
-      return Math.round(frac * 5); // 0–5, snapt op elke stap
+      return Math.max(1, Math.round(frac * 5)); // 1–5
     }
     function apply(v) { flow.factors[factorKey] = v; paint(v); }
 
@@ -256,8 +294,48 @@
       h('div', { class: 'factors' }, factorRows),
       noteInput,
       h('div', { class: 'confirm-actions' }, [
-        h('button', { class: 'btn-skip', text: 'overslaan', onclick: function () { commit(false); } }),
-        h('button', { class: 'btn-done', text: 'klaar', onclick: function () { commit(true); } })
+        h('button', { class: 'btn-skip', text: 'overslaan', onclick: function () { saveAndAdvance(false); } }),
+        h('button', { class: 'btn-done', text: 'opslaan', onclick: function () { saveAndAdvance(true); } })
+      ])
+    ]);
+  }
+
+  /* ---------- Laag 4: principes + tools ---------- */
+  function renderTools() {
+    var c = colorForKey(flow.key);
+    return h('div', { class: 'screen-overlay' }, [
+      h('button', { class: 'back-btn', text: '‹ terug', onclick: back }),
+      h('div', { class: 'ov-head' }, [
+        h('span', { class: 'ov-dot', style: { background: c } }),
+        h('div', { class: 'ov-title', style: { color: c }, text: flow.emotion || LABEL[flow.key] }),
+        h('div', { class: 'ov-sub', text: 'wat past bij deze staat' })
+      ]),
+
+      h('div', { class: 'pt-section' }, [
+        h('div', { class: 'pt-head', text: 'principes' })
+      ].concat(PRINCIPES.map(function (p) {
+        return h('div', { class: 'principe-item' }, [
+          h('span', { class: 'principe-dot', style: { background: c } }),
+          h('span', { class: 'principe-text', text: p })
+        ]);
+      }))),
+
+      h('div', { class: 'pt-section' }, [
+        h('div', { class: 'pt-head', text: 'tools' }),
+        h('div', { class: 'tool-list' }, TOOLS.map(function (t) {
+          return h('button', { class: 'tool-item' }, [
+            h('span', { class: 'tool-icon', style: { background: bg(HUE[flow.key], 0.14) }, text: t.icon }),
+            h('span', { class: 'tool-text' }, [
+              h('span', { class: 'tool-label', text: t.label }),
+              h('span', { class: 'tool-sub', text: t.sub })
+            ])
+          ]);
+        }))
+      ]),
+
+      h('div', { class: 'confirm-actions', style: { marginTop: '36px' } }, [
+        h('button', { class: 'btn-skip', text: 'overslaan', onclick: finishFlow }),
+        h('button', { class: 'btn-done', text: 'klaar', onclick: finishFlow })
       ])
     ]);
   }
@@ -417,7 +495,12 @@
     root.replaceChildren();
     root.appendChild(screen === 'log' ? renderLog() : renderIns());
     root.appendChild(renderNav());
-    if (flow) root.appendChild(flow.step === 'pick' ? renderPick() : renderFactors());
+    if (flow) {
+      root.appendChild(
+        flow.step === 'pick' ? renderPick() :
+        flow.step === 'factors' ? renderFactors() : renderTools()
+      );
+    }
   }
 
   document.addEventListener('DOMContentLoaded', function () {
