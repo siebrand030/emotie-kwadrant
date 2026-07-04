@@ -1,6 +1,6 @@
 /* Emotie Kwadrant — service worker.
    Cache-first app-shell + runtime-cache voor Google Fonts (offline gebruik). */
-var VERSION = 'kwadrant-v3';
+var VERSION = 'kwadrant-v4';
 var SHELL = 'shell-' + VERSION;
 var FONTS = 'fonts-' + VERSION;
 
@@ -57,17 +57,18 @@ self.addEventListener('fetch', function (event) {
   // Alleen eigen origin verder afhandelen.
   if (url.origin !== self.location.origin) return;
 
-  // App-shell: cache-first, val terug op index.html voor navigaties (offline).
+  // App-shell: network-first zodat je online altijd de nieuwste versie ziet;
+  // val terug op cache (en index.html voor navigaties) als je offline bent.
   event.respondWith(
-    caches.match(req).then(function (cached) {
-      if (cached) return cached;
-      return fetch(req).then(function (res) {
-        if (res && res.ok && res.type === 'basic') {
-          var copy = res.clone();
-          caches.open(SHELL).then(function (cache) { cache.put(req, copy); });
-        }
-        return res;
-      }).catch(function () {
+    fetch(req).then(function (res) {
+      if (res && res.ok && res.type === 'basic') {
+        var copy = res.clone();
+        caches.open(SHELL).then(function (cache) { cache.put(req, copy); });
+      }
+      return res;
+    }).catch(function () {
+      return caches.match(req).then(function (cached) {
+        if (cached) return cached;
         if (req.mode === 'navigate') return caches.match('./index.html');
       });
     })
