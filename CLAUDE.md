@@ -65,18 +65,38 @@ TypeScript-types voor dit model staan in `lib/supabase/types.ts`.
 ## Projectstructuur
 
 ```
+middleware.ts           sessie-refresh + route-bescherming
 app/                    Next.js App Router
   layout.tsx            root-layout + PWA-metadata
   globals.css           Tailwind + design-tokens (OKLCH-kwadrantkleuren)
   page.tsx              landing / navigatie
-  planner/page.tsx      /planner — dag-tijdlijn
-  inbox/page.tsx        /inbox   — ongeplande taken
+  login/page.tsx        /login — magic link (signInWithOtp)
+  auth/callback/route.ts  wisselt de magic-link-code om voor een sessie
+  planner/page.tsx      /planner — dag-tijdlijn (beschermd)
+  inbox/page.tsx        /inbox   — ongeplande taken (beschermd)
 components/planner/     dagplanner-componenten (timeline, inbox-list, …)
-lib/supabase/           client.ts (browser), server.ts (SSR), types.ts
+components/auth/        sign-out-button, …
+lib/supabase/           client.ts (browser), server.ts (SSR),
+                        middleware.ts (session-refresh), types.ts
 public/                 statische assets (iconen, manifest)
 supabase/migrations/    SQL-migraties
 legacy/                 originele vanilla-JS PWA (referentie voor migratie)
 ```
+
+## Authenticatie
+
+Magic-link login via Supabase Auth (`@supabase/ssr`):
+
+- `/login` roept `signInWithOtp` aan met `emailRedirectTo` → `/auth/callback`.
+- `/auth/callback` wisselt de `code` (PKCE) om voor een sessie
+  (`exchangeCodeForSession`) en stuurt door naar `next` (default `/planner`).
+- `middleware.ts` ververst de sessie op elke request en beschermt `/planner` en
+  `/inbox`: niet-ingelogd → redirect naar `/login?next=<pad>`.
+- Uitloggen via `components/auth/sign-out-button.tsx` (`signOut` + redirect).
+
+Supabase-dashboard: zet onder **Authentication → URL Configuration** de redirect
+URL `http://localhost:3000/**` (en later de productie-URL) op de allowlist,
+anders weigert Supabase de magic-link-redirect.
 
 ## Commando's
 
