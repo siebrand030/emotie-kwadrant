@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { BottomNav } from "@/components/nav/bottom-nav";
 
 /**
  * /tools — overzicht van tools binnen de app. Voor nu is de dagplanner de enige
@@ -27,6 +28,7 @@ export default function ToolsPage() {
           <span className="text-lg text-[#565C60]">›</span>
         </Link>
       </div>
+      <BottomNav />
     </main>
   );
 }
