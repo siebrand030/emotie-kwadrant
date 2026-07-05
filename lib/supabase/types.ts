@@ -1,6 +1,6 @@
 /**
- * Handmatig datamodel voor de `tasks`-tabel. Vervang dit later door de
- * gegenereerde types (`supabase gen types typescript`).
+ * Handmatig datamodel voor de `tasks`- en `checkins`-tabellen. Vervang dit
+ * later door de gegenereerde types (`supabase gen types typescript`).
  *
  * Conventie: inbox en tijdlijn delen bewust één tabel. Het `status`-veld
  * bepaalt waar een taak thuishoort:
@@ -76,6 +76,56 @@ export type TaskInsert = Pick<Task, "title"> &
 export type TaskUpdate = Partial<Omit<TaskInsert, "title">> &
   Partial<Pick<Task, "title">>;
 
+// --- Emotie-logger: `checkins` ---
+
+/** Kwadrant-key uit de emotie-logger (labels: Beuken/Bouwen/Wegkwijnen/Ontspannen). */
+export type Quadrant = "forceren" | "bouwen" | "wegzakken" | "opladen";
+
+/** De 6 factoren (laag 3), elk 1-5 of null (= niet ingesteld). */
+export type FactorKey =
+  | "slaap"
+  | "stress"
+  | "eten"
+  | "wiet"
+  | "alcohol"
+  | "planning";
+
+export type Checkin = {
+  id: string;
+  user_id: string;
+  quadrant: Quadrant;
+  emotion: string;
+  logged_at: string; // ISO timestamptz (moment van loggen)
+  factor_slaap: number | null;
+  factor_stress: number | null;
+  factor_eten: number | null;
+  factor_wiet: number | null;
+  factor_alcohol: number | null;
+  factor_planning: number | null;
+  note: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+/** Velden die de client mag aanleveren bij het aanmaken van een check-in. */
+export type CheckinInsert = Pick<Checkin, "quadrant" | "emotion"> &
+  Partial<
+    Pick<
+      Checkin,
+      | "logged_at"
+      | "factor_slaap"
+      | "factor_stress"
+      | "factor_eten"
+      | "factor_wiet"
+      | "factor_alcohol"
+      | "factor_planning"
+      | "note"
+    >
+  >;
+
+/** Velden die bij een update gewijzigd mogen worden. */
+export type CheckinUpdate = Partial<CheckinInsert>;
+
 export type Database = {
   public: {
     Tables: {
@@ -83,6 +133,12 @@ export type Database = {
         Row: Task;
         Insert: TaskInsert & { user_id: string };
         Update: TaskUpdate;
+        Relationships: [];
+      };
+      checkins: {
+        Row: Checkin;
+        Insert: CheckinInsert & { user_id: string };
+        Update: CheckinUpdate;
         Relationships: [];
       };
     };

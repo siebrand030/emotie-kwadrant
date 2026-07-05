@@ -65,6 +65,16 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 
+/* Fade-in van de logger-overlays (emotie-kiezer/factoren/tools). */
+@keyframes stilfade {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
 /* Bottom-sheet van de taak-editor (uit het Claude Design-prototype). */
 @keyframes sheetup {
   from {

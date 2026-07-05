@@ -1,25 +1,27 @@
+import { redirect } from "next/navigation";
+import { createClient } from "@/lib/supabase/server";
+import { fetchCheckins } from "@/lib/checkins";
+import { EmotionLogger } from "@/components/logger/emotion-logger";
 import { BottomNav } from "@/components/nav/bottom-nav";
 
 /**
- * Home = het incheck-scherm ("nu"). De emotie-logger wordt hier later
- * gemigreerd; tot die tijd staat er een korte toelichting. De dagplanner en
- * andere tools bereik je via de onderbalk → Tools.
+ * Home = het incheck-scherm ("nu"): de emotie-logger uit legacy/, nu op
+ * Supabase. Beschermde route; we halen de check-ins server-side op en geven ze
+ * mee aan de client-logger, die de flow + opslag afhandelt.
  */
-export default function Home() {
+export default async function Home() {
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) redirect("/login?next=/");
+
+  const checkins = await fetchCheckins(supabase);
+
   return (
-    <div className="mx-auto flex min-h-dvh max-w-md flex-col">
-      <main className="flex flex-1 flex-col justify-center gap-8 px-6 py-16">
-        <header className="space-y-2">
-          <h1 className="text-3xl font-semibold tracking-tight">
-            Emotie-bibliotheek
-          </h1>
-          <p className="text-muted text-sm">
-            Migratie naar Next.js in uitvoering. De emotie-logger komt hier; de
-            dagplanner vind je onder Tools.
-          </p>
-        </header>
-      </main>
+    <main className="font-plex relative mx-auto flex h-dvh max-w-md flex-col overflow-hidden bg-[#0B0C0D] text-[#E9EBEA]">
+      <EmotionLogger userId={user.id} initialCheckins={checkins} />
       <BottomNav />
-    </div>
+    </main>
   );
 }
