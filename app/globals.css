@@ -1,0 +1,41 @@
+@import "tailwindcss";
+
+/* Design-tokens overgenomen uit de vanilla-app (legacy/styles.css):
+   donkere shell + OKLCH-kwadrantkleuren. Zo blijft het visuele systeem
+   consistent tijdens de migratie naar Next.js. */
+:root {
+  --bg: #0b0c0d;
+  --fg: #f3f3f2;
+  --muted: oklch(72% 0.02 250);
+
+  /* Kwadrant-hues (identiek aan EMO[].hue in legacy/app.js) */
+  --hue-beuken: 25;   /* Beuken / forceren  — aan + duw */
+  --hue-bouwen: 150;  /* Bouwen             — aan + trek */
+  --hue-wegkwijnen: 290; /* Wegkwijnen      — uit + duw */
+  --hue-ontspannen: 220; /* Ontspannen      — uit + trek */
+
+  /* Task-kleuren voor de dagplanner (color-veld op tasks). */
+  --task-coral: oklch(72% 0.13 25);
+  --task-amber: oklch(78% 0.12 70);
+  --task-mint: oklch(75% 0.11 150);
+  --task-sky: oklch(72% 0.1 220);
+  --task-violet: oklch(70% 0.12 290);
+}
+
+@theme inline {
+  --color-bg: var(--bg);
+  --color-fg: var(--fg);
+  --color-muted: var(--muted);
+  --color-task-coral: var(--task-coral);
+  --color-task-amber: var(--task-amber);
+  --color-task-mint: var(--task-mint);
+  --color-task-sky: var(--task-sky);
+  --color-task-violet: var(--task-violet);
+}
+
+html,
+body {
+  background: var(--bg);
+  color: var(--fg);
+  -webkit-font-smoothing: antialiased;
+}
