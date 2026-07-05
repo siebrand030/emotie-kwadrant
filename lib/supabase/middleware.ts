@@ -5,7 +5,7 @@ import type { Database } from "./types";
 type CookieToSet = { name: string; value: string; options: CookieOptions };
 
 /** Routes die inloggen vereisen. */
-const PROTECTED_PREFIXES = ["/planner", "/inbox"];
+const PROTECTED_PREFIXES = ["/tools", "/planner", "/inbox"];
 
 /**
  * Ververst de Supabase-sessie op elke request (tokens roteren) en beschermt

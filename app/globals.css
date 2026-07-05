@@ -20,6 +20,13 @@
   --task-mint: oklch(75% 0.11 150);
   --task-sky: oklch(72% 0.1 220);
   --task-violet: oklch(70% 0.12 290);
+
+  /* Planner-accent = taakkleur 0 uit het Claude Design-prototype
+     (oklch 72% 0.085 25 — warm terracotta/koraal). Wordt gebruikt voor de
+     tools-kaart, de FAB, de nu-indicator en de geselecteerde dag. */
+  --planner-accent: oklch(72% 0.085 25);
+  --planner-accent-tint: oklch(72% 0.085 25 / 0.09);
+  --planner-accent-line: oklch(72% 0.085 25 / 0.3);
 }
 
 @theme inline {
@@ -31,6 +38,15 @@
   --color-task-mint: var(--task-mint);
   --color-task-sky: var(--task-sky);
   --color-task-violet: var(--task-violet);
+
+  /* Planner-accent als kleur-utilities (bg-/text-/border-planner-accent…). */
+  --color-planner-accent: var(--planner-accent);
+  --color-planner-accent-tint: var(--planner-accent-tint);
+  --color-planner-accent-line: var(--planner-accent-line);
+
+  /* IBM Plex, alleen voor de dagplanner-schermen: font-plex / font-plex-mono. */
+  --font-plex: var(--font-ibm-sans), ui-sans-serif, system-ui, sans-serif;
+  --font-plex-mono: var(--font-ibm-mono), ui-monospace, monospace;
 }
 
 html,

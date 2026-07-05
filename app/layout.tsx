@@ -1,5 +1,24 @@
 import type { Metadata, Viewport } from "next";
+import { IBM_Plex_Sans, IBM_Plex_Mono } from "next/font/google";
 import "./globals.css";
+
+// IBM Plex Sans/Mono voor de dagplanner-schermen (tools/planner). We zetten ze
+// als CSS-variabelen op <html>; alleen de planner-UI gebruikt ze (via de
+// font-plex / font-plex-mono utilities), zodat de bestaande home ongewijzigd
+// blijft.
+const plexSans = IBM_Plex_Sans({
+  subsets: ["latin"],
+  weight: ["400", "500", "600"],
+  variable: "--font-ibm-sans",
+  display: "swap",
+});
+
+const plexMono = IBM_Plex_Mono({
+  subsets: ["latin"],
+  weight: ["400", "500"],
+  variable: "--font-ibm-mono",
+  display: "swap",
+});
 
 export const metadata: Metadata = {
   title: "Emotie-bibliotheek",
@@ -26,7 +45,7 @@ export default function RootLayout({
   children,
 }: Readonly<{ children: React.ReactNode }>) {
   return (
-    <html lang="nl">
+    <html lang="nl" className={`${plexSans.variable} ${plexMono.variable}`}>
       <body>{children}</body>
     </html>
   );
