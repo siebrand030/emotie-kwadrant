@@ -1,0 +1,88 @@
+@import "tailwindcss";
+
+/* Design-tokens overgenomen uit de vanilla-app (legacy/styles.css):
+   donkere shell + OKLCH-kwadrantkleuren. Zo blijft het visuele systeem
+   consistent tijdens de migratie naar Next.js. */
+:root {
+  --bg: #0b0c0d;
+  --fg: #f3f3f2;
+  --muted: oklch(72% 0.02 250);
+
+  /* Kwadrant-hues (identiek aan EMO[].hue in legacy/app.js) */
+  --hue-beuken: 25;   /* Beuken / forceren  — aan + duw */
+  --hue-bouwen: 150;  /* Bouwen             — aan + trek */
+  --hue-wegkwijnen: 290; /* Wegkwijnen      — uit + duw */
+  --hue-ontspannen: 220; /* Ontspannen      — uit + trek */
+
+  /* Task-kleuren voor de dagplanner (color-veld op tasks). 8 tinten uit het
+     Claude Design-prototype: oklch(72% 0.085 <hue>) — alleen de hue verschilt.
+     Kleur 0 = coral (hue 25) = DB-default. Tints/lijnen worden per taak
+     berekend met color-mix (zie lib/task-colors.ts). */
+  --task-coral: oklch(72% 0.085 25);
+  --task-amber: oklch(72% 0.085 60);
+  --task-lime: oklch(72% 0.085 110);
+  --task-mint: oklch(72% 0.085 150);
+  --task-teal: oklch(72% 0.085 190);
+  --task-sky: oklch(72% 0.085 220);
+  --task-indigo: oklch(72% 0.085 260);
+  --task-magenta: oklch(72% 0.085 330);
+
+  /* Planner-accent = taakkleur 0 uit het Claude Design-prototype
+     (oklch 72% 0.085 25 — warm terracotta/koraal). Wordt gebruikt voor de
+     tools-kaart, de FAB, de nu-indicator en de geselecteerde dag. */
+  --planner-accent: oklch(72% 0.085 25);
+  --planner-accent-tint: oklch(72% 0.085 25 / 0.09);
+  --planner-accent-line: oklch(72% 0.085 25 / 0.3);
+}
+
+@theme inline {
+  --color-bg: var(--bg);
+  --color-fg: var(--fg);
+  --color-muted: var(--muted);
+  --color-task-coral: var(--task-coral);
+  --color-task-amber: var(--task-amber);
+  --color-task-lime: var(--task-lime);
+  --color-task-mint: var(--task-mint);
+  --color-task-teal: var(--task-teal);
+  --color-task-sky: var(--task-sky);
+  --color-task-indigo: var(--task-indigo);
+  --color-task-magenta: var(--task-magenta);
+
+  /* Planner-accent als kleur-utilities (bg-/text-/border-planner-accent…). */
+  --color-planner-accent: var(--planner-accent);
+  --color-planner-accent-tint: var(--planner-accent-tint);
+  --color-planner-accent-line: var(--planner-accent-line);
+
+  /* IBM Plex, alleen voor de dagplanner-schermen: font-plex / font-plex-mono. */
+  --font-plex: var(--font-ibm-sans), ui-sans-serif, system-ui, sans-serif;
+  --font-plex-mono: var(--font-ibm-mono), ui-monospace, monospace;
+}
+
+html,
+body {
+  background: var(--bg);
+  color: var(--fg);
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Fade-in van de logger-overlays (emotie-kiezer/factoren/tools). */
+@keyframes stilfade {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+/* Bottom-sheet van de taak-editor (uit het Claude Design-prototype). */
+@keyframes sheetup {
+  from {
+    transform: translateY(24px);
+    opacity: 0;
+  }
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
