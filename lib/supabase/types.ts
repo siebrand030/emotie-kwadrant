@@ -11,9 +11,38 @@
 
 export type TaskStatus = "inbox" | "scheduled";
 
-export type TaskColor = "coral" | "amber" | "mint" | "sky" | "violet";
+/**
+ * De 8 taakkleuren uit het Claude Design-prototype — oklch(72% 0.085 <hue>),
+ * alleen de hue verschilt (zie app/globals.css). Kleur 0 = coral (hue 25) is
+ * de DB-default. Opgeslagen als kleurnaam in het `color`-veld (text).
+ */
+export type TaskColor =
+  | "coral"
+  | "amber"
+  | "lime"
+  | "mint"
+  | "teal"
+  | "sky"
+  | "indigo"
+  | "magenta";
 
-export interface Task {
+/** Volgorde van de kleurkiezer in de taak-sheet. */
+export const TASK_COLORS: readonly TaskColor[] = [
+  "coral",
+  "amber",
+  "lime",
+  "mint",
+  "teal",
+  "sky",
+  "indigo",
+  "magenta",
+];
+
+// Bewust een type-alias (geen interface): alleen type-aliassen krijgen de
+// impliciete index-signature die Supabase' GenericSchema-constraint
+// (Record<string, unknown>) vereist. Met een interface valt het schema terug
+// op `any` en verliezen we alle Row/Insert/Update-typing.
+export type Task = {
   id: string;
   user_id: string;
   title: string;
@@ -26,7 +55,7 @@ export interface Task {
   completed: boolean;
   created_at: string;
   updated_at: string;
-}
+};
 
 /** Velden die de client mag aanleveren bij het aanmaken van een taak. */
 export type TaskInsert = Pick<Task, "title"> &
@@ -47,14 +76,19 @@ export type TaskInsert = Pick<Task, "title"> &
 export type TaskUpdate = Partial<Omit<TaskInsert, "title">> &
   Partial<Pick<Task, "title">>;
 
-export interface Database {
+export type Database = {
   public: {
     Tables: {
       tasks: {
         Row: Task;
         Insert: TaskInsert & { user_id: string };
         Update: TaskUpdate;
+        Relationships: [];
       };
     };
+    // Leeg maar aanwezig zodat het schema aan Supabase' GenericSchema voldoet
+    // en de client-types (Row/Insert/Update) strikt afgeleid worden.
+    Views: Record<never, never>;
+    Functions: Record<never, never>;
   };
 }

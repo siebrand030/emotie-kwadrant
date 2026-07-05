@@ -14,12 +14,18 @@
   --hue-wegkwijnen: 290; /* Wegkwijnen      — uit + duw */
   --hue-ontspannen: 220; /* Ontspannen      — uit + trek */
 
-  /* Task-kleuren voor de dagplanner (color-veld op tasks). */
-  --task-coral: oklch(72% 0.13 25);
-  --task-amber: oklch(78% 0.12 70);
-  --task-mint: oklch(75% 0.11 150);
-  --task-sky: oklch(72% 0.1 220);
-  --task-violet: oklch(70% 0.12 290);
+  /* Task-kleuren voor de dagplanner (color-veld op tasks). 8 tinten uit het
+     Claude Design-prototype: oklch(72% 0.085 <hue>) — alleen de hue verschilt.
+     Kleur 0 = coral (hue 25) = DB-default. Tints/lijnen worden per taak
+     berekend met color-mix (zie lib/task-colors.ts). */
+  --task-coral: oklch(72% 0.085 25);
+  --task-amber: oklch(72% 0.085 60);
+  --task-lime: oklch(72% 0.085 110);
+  --task-mint: oklch(72% 0.085 150);
+  --task-teal: oklch(72% 0.085 190);
+  --task-sky: oklch(72% 0.085 220);
+  --task-indigo: oklch(72% 0.085 260);
+  --task-magenta: oklch(72% 0.085 330);
 
   /* Planner-accent = taakkleur 0 uit het Claude Design-prototype
      (oklch 72% 0.085 25 — warm terracotta/koraal). Wordt gebruikt voor de
@@ -35,9 +41,12 @@
   --color-muted: var(--muted);
   --color-task-coral: var(--task-coral);
   --color-task-amber: var(--task-amber);
+  --color-task-lime: var(--task-lime);
   --color-task-mint: var(--task-mint);
+  --color-task-teal: var(--task-teal);
   --color-task-sky: var(--task-sky);
-  --color-task-violet: var(--task-violet);
+  --color-task-indigo: var(--task-indigo);
+  --color-task-magenta: var(--task-magenta);
 
   /* Planner-accent als kleur-utilities (bg-/text-/border-planner-accent…). */
   --color-planner-accent: var(--planner-accent);
@@ -54,4 +63,16 @@ body {
   background: var(--bg);
   color: var(--fg);
   -webkit-font-smoothing: antialiased;
+}
+
+/* Bottom-sheet van de taak-editor (uit het Claude Design-prototype). */
+@keyframes sheetup {
+  from {
+    transform: translateY(24px);
+    opacity: 0;
+  }
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
 }
