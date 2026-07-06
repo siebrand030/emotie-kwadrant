@@ -1,4 +1,4 @@
-import type { TaskColor } from "./supabase/types";
+import type { PlanItemSource, TaskColor } from "./supabase/types";
 
 /**
  * Rendering-helpers voor de 8 taakkleuren. De basiskleuren staan als CSS-vars
@@ -13,4 +13,21 @@ export function taskColor(color: TaskColor): string {
 /** Taakkleur op een percentage dekking (rest transparant). */
 export function taskColorMix(color: TaskColor, percent: number): string {
   return `color-mix(in oklab, var(--task-${color}) ${percent}%, transparent)`;
+}
+
+/**
+ * Kleur volgt herkomst, niet activiteit-type: zo blijft aan het eind van de
+ * dag zichtbaar hoeveel van de oorspronkelijke braindump-planning nog staat
+ * versus wat er ad hoc bij is gekomen.
+ */
+export function sourceColor(source: PlanItemSource): TaskColor {
+  switch (source) {
+    case "adhoc":
+      return "coral";
+    case "calendar":
+      return "amber";
+    case "planned":
+    default:
+      return "sky";
+  }
 }

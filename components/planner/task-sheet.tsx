@@ -1,20 +1,26 @@
 "use client";
 
-import { TASK_COLORS, type TaskColor } from "@/lib/supabase/types";
-import { taskColor, taskColorMix } from "@/lib/task-colors";
+import { sourceColor, taskColor, taskColorMix } from "@/lib/task-colors";
 import { addMin, fmtDur } from "@/lib/planner-time";
+import type { PlanItemSource } from "@/lib/supabase/types";
 
-/** Concept-taak in de sheet. `taskId` gezet = bestaande rij (bewerken of een
- *  inbox-item inplannen); null = nieuwe ingeplande taak. */
+/**
+ * Sheet-staat: "create" bij een nieuw item (tik op een leeg tijdstip op de
+ * tijdlijn), "edit" bij een al bestaand item (tik op een blok). Alleen in
+ * create-mode krijgt het titelveld autofocus/toetsenbord — bij edit wil je
+ * niet dat tikken op een blok meteen het toetsenbord opent.
+ *
+ * `source` bepaalt (via sourceColor) de accentkleur; niet los instelbaar —
+ * kleur is herkomst, geen vrije keuze.
+ */
 export interface SheetState {
   mode: "create" | "edit";
-  taskId: string | null;
+  itemId: string | null;
   title: string;
-  date: string; // YYYY-MM-DD
   start: string; // HH:MM
   dur: number; // minuten
-  color: TaskColor;
   note: string;
+  source: PlanItemSource;
 }
 
 const DURATION_CHIPS = [
@@ -28,31 +34,16 @@ const DURATION_CHIPS = [
 
 interface TaskSheetProps {
   sheet: SheetState;
-  today: string;
   onClose: () => void;
   onPatch: (patch: Partial<SheetState>) => void;
   onSave: () => void;
   onDelete: () => void;
 }
 
-export function TaskSheet({
-  sheet,
-  today,
-  onClose,
-  onPatch,
-  onSave,
-  onDelete,
-}: TaskSheetProps) {
-  const accent = taskColor(sheet.color);
+export function TaskSheet({ sheet, onClose, onPatch, onSave, onDelete }: TaskSheetProps) {
+  const color = sourceColor(sheet.source);
+  const accent = taskColor(color);
   const end = addMin(sheet.start, sheet.dur);
-  const dateLabel =
-    sheet.date === today
-      ? "vandaag"
-      : new Date(sheet.date + "T00:00:00").toLocaleDateString("nl-NL", {
-          weekday: "short",
-          day: "numeric",
-          month: "short",
-        });
   const canSave = sheet.title.trim().length > 0;
 
   return (
@@ -64,34 +55,25 @@ export function TaskSheet({
         onClick={(e) => e.stopPropagation()}
         className="max-h-[86%] overflow-y-auto rounded-t-3xl border-t border-white/10 bg-[#15171A] px-5 pt-[18px] pb-[30px] [animation:sheetup_0.3s_ease-out]"
       >
-        {/* Live preview: tijdspanne + titel, in de gekozen taakkleur */}
+        {/* Live preview: tijdspanne + titel, in de taakkleur */}
         <div
           className="mb-5 flex flex-col gap-1.5 rounded-2xl border p-4"
           style={{
-            background: taskColorMix(sheet.color, 13),
-            borderColor: taskColorMix(sheet.color, 30),
+            background: taskColorMix(color, 13),
+            borderColor: taskColorMix(color, 30),
           }}
         >
           <span className="font-plex-mono text-[11px]" style={{ color: accent }}>
-            {dateLabel} · {sheet.start} – {end} ({fmtDur(sheet.dur)})
+            vandaag · {sheet.start} – {end} ({fmtDur(sheet.dur)})
           </span>
           <input
             value={sheet.title}
             onChange={(e) => onPatch({ title: e.target.value })}
             placeholder="Structureer je dag"
-            autoFocus
+            autoFocus={sheet.mode === "create"}
             className="w-full border-none bg-transparent p-0 text-xl font-medium text-[#E9EBEA] outline-none placeholder:text-[#565C60]"
           />
         </div>
-
-        {/* Datum */}
-        <div className="font-plex-mono mb-2 text-[11px] text-[#565C60]">datum</div>
-        <input
-          type="date"
-          value={sheet.date}
-          onChange={(e) => e.target.value && onPatch({ date: e.target.value })}
-          className="font-plex-mono mb-[18px] w-full rounded-[10px] border border-white/10 bg-[#0F1112] px-3 py-2.5 text-[13px] text-[#E9EBEA] outline-none [color-scheme:dark]"
-        />
 
         {/* Tijd: starttijd + berekende eindtijd + duur-presets */}
         <div className="font-plex-mono mb-2 text-[11px] text-[#565C60]">tijd</div>
@@ -99,14 +81,10 @@ export function TaskSheet({
           <input
             type="time"
             value={sheet.start}
-            onChange={(e) =>
-              e.target.value && onPatch({ start: e.target.value })
-            }
+            onChange={(e) => e.target.value && onPatch({ start: e.target.value })}
             className="font-plex-mono rounded-[10px] border border-white/10 bg-[#0F1112] px-3 py-2.5 text-[13px] text-[#E9EBEA] outline-none [color-scheme:dark]"
           />
-          <span className="font-plex-mono text-[11.5px] text-[#6C7377]">
-            tot {end}
-          </span>
+          <span className="font-plex-mono text-[11.5px] text-[#6C7377]">tot {end}</span>
         </div>
         <div className="mb-5 flex flex-wrap gap-2">
           {DURATION_CHIPS.map((chip) => {
@@ -133,43 +111,21 @@ export function TaskSheet({
           })}
         </div>
 
-        {/* Kleurkiezer: 8 kleuren, gekozen krijgt een ring */}
-        <div className="font-plex-mono mb-2.5 text-[11px] text-[#565C60]">kleur</div>
-        <div className="mb-[22px] flex gap-3 overflow-x-auto px-0.5 py-1">
-          {TASK_COLORS.map((c) => (
-            <button
-              key={c}
-              type="button"
-              aria-label={c}
-              onClick={() => onPatch({ color: c })}
-              className="size-[30px] flex-none rounded-full border-none p-0"
-              style={{
-                background: taskColor(c),
-                boxShadow:
-                  sheet.color === c
-                    ? `0 0 0 2.5px #15171A, 0 0 0 4.5px ${taskColor(c)}`
-                    : "none",
-              }}
-            />
-          ))}
-        </div>
-
         {/* Notitie */}
         <div className="font-plex-mono mb-2 text-[11px] text-[#565C60]">notitie</div>
         <input
           value={sheet.note}
           onChange={(e) => onPatch({ note: e.target.value })}
-          placeholder="Notities, links of telefoonnummers..."
           className="mb-[22px] w-full rounded-[10px] border border-white/10 bg-[#0F1112] px-3 py-[11px] text-[13px] text-[#E9EBEA] outline-none placeholder:text-[#565C60]"
         />
 
-        {/* Acties: verwijderen (alleen bewerken) + opslaan */}
+        {/* Acties: verwijderen (alleen bij bestaand item) + opslaan */}
         <div className="flex items-center gap-3">
           {sheet.mode === "edit" && (
             <button
               type="button"
               onClick={onDelete}
-              aria-label="Taak verwijderen"
+              aria-label="Item verwijderen"
               className="flex size-[50px] flex-none items-center justify-center rounded-[14px] border border-white/10 bg-transparent text-[#9AA0A3]"
             >
               <svg width="16" height="17" viewBox="0 0 16 17" fill="none">

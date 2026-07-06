@@ -45,3 +45,13 @@ export function defaultStart(): string {
   if (m >= 1440) m = 1425;
   return minToTime(m);
 }
+
+/** Rondt minuten af op het dichtstbijzijnde kwartier (voor drag/resize-snapping). */
+export function snap(minutes: number, step = 15): number {
+  return Math.round(minutes / step) * step;
+}
+
+/** Klemt minuten sinds middernacht tussen 0 en 23:45 (laatste kwartier van de dag). */
+export function clampMinutesOfDay(minutes: number): number {
+  return Math.max(0, Math.min(1425, minutes));
+}

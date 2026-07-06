@@ -36,9 +36,16 @@ export const metadata: Metadata = {
   },
 };
 
+// maximumScale/userScalable uit: dit is een app-achtige PWA, geen document —
+// zonder dit zoomt mobiele Safari/Chrome automatisch in zodra een invoerveld
+// met font-size < 16px focus krijgt (bijv. de braindump-invoer).
 export const viewport: Viewport = {
   themeColor: "#0b0c0d",
   viewportFit: "cover",
+  width: "device-width",
+  initialScale: 1,
+  maximumScale: 1,
+  userScalable: false,
 };
 
 export default function RootLayout({
