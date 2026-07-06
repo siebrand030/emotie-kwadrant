@@ -124,6 +124,22 @@ export async function fetchHabitMetrics(
   return data ?? [];
 }
 
+/** Metric-metingen voor meerdere habits ineens (bijv. alle track_metric-habits
+ * van de gebruiker), oplopend op datum. */
+export async function fetchHabitMetricsForHabits(
+  supabase: Supabase,
+  habitIds: string[],
+): Promise<HabitMetric[]> {
+  if (habitIds.length === 0) return [];
+  const { data, error } = await typed(supabase)
+    .from("habit_metrics")
+    .select("*")
+    .in("habit_id", habitIds)
+    .order("measured_on", { ascending: true });
+  if (error) throw error;
+  return data ?? [];
+}
+
 // ---- Datumhelpers (lokale tijd, niet UTC — de gebruiker denkt in kalenderdagen) ----
 
 /** YYYY-MM-DD voor een Date, in lokale tijd. */
@@ -186,3 +202,113 @@ export const SKIP_REASON_LABELS: Record<SkipReason, string> = {
   niet_van_toepassing: "niet van toepassing",
   anders: "anders",
 };
+
+// ---- Fase 2: metric-prompt, afsluit-inzicht, weekoverzicht ----
+
+/** Is het tijd om de gebruiker (na het afvinken van een track_metric-habit)
+ * om een nieuwe meting te vragen? Ja als er nog nooit gemeten is, of als de
+ * laatste meting langer geleden is dan `metric_prompt_interval_days`. */
+export function shouldPromptMetric(
+  habit: Habit,
+  metrics: HabitMetric[],
+  today: Date = new Date(),
+): boolean {
+  if (!habit.track_metric) return false;
+  const habitMetrics = metrics.filter((m) => m.habit_id === habit.id);
+  if (habitMetrics.length === 0) return true;
+  const lastMeasuredOn = habitMetrics.reduce(
+    (latest, m) => (m.measured_on > latest ? m.measured_on : latest),
+    habitMetrics[0].measured_on,
+  );
+  const lastDate = new Date(`${lastMeasuredOn}T00:00:00`);
+  const diffDays = Math.round(
+    (today.getTime() - lastDate.getTime()) / (1000 * 60 * 60 * 24),
+  );
+  return diffDays >= habit.metric_prompt_interval_days;
+}
+
+export type Insight =
+  | { kind: "metric"; habit: Habit; value: number; previous: number | null }
+  | { kind: "daily"; habit: Habit; done: number; total: number }
+  | { kind: "weekly"; habit: Habit; done: number; target: number }
+  | null;
+
+/**
+ * Selecteert precies één inzicht voor het afsluitscherm, op prioriteit (zie
+ * feature-spec §6):
+ *   1. Vandaag een metric gelogd → verandering t.o.v. de vorige meting
+ *   2. Anders → consistentie van de (eerste) dagelijkse habit
+ *   3. Anders → weekvoortgang van de (eerste) weekly_count-habit
+ */
+export function pickInsight(
+  habits: Habit[],
+  logs: HabitLog[],
+  metrics: HabitMetric[],
+  today: Date = new Date(),
+): Insight {
+  const todayKey = toDateKey(today);
+
+  for (const habit of habits) {
+    if (!habit.track_metric) continue;
+    const habitMetrics = metrics
+      .filter((m) => m.habit_id === habit.id)
+      .sort((a, b) => a.measured_on.localeCompare(b.measured_on));
+    const todays = habitMetrics.filter((m) => m.measured_on === todayKey);
+    if (todays.length === 0) continue;
+    const value = todays[todays.length - 1].value;
+    const earlier = habitMetrics.filter((m) => m.measured_on < todayKey);
+    const previous = earlier.length ? earlier[earlier.length - 1].value : null;
+    return { kind: "metric", habit, value, previous };
+  }
+
+  const dailyHabit = habits.find((h) => h.schedule_type === "daily");
+  if (dailyHabit) {
+    const { done, total } = dailyConsistency(logs, dailyHabit.id, lastNDays(7, today));
+    return { kind: "daily", habit: dailyHabit, done, total };
+  }
+
+  const weeklyHabit = habits.find((h) => h.schedule_type === "weekly_count");
+  if (weeklyHabit) {
+    const done = weeklyProgress(logs, weeklyHabit.id, startOfWeek(today));
+    return { kind: "weekly", habit: weeklyHabit, done, target: weeklyHabit.weekly_target ?? 0 };
+  }
+
+  return null;
+}
+
+export type DotStatus = "done" | "skipped" | "empty";
+
+/** Status per dag voor het weekoverzicht (dots), oudste eerst. */
+export function weekDotStatuses(
+  logs: HabitLog[],
+  habitId: string,
+  days: string[],
+): DotStatus[] {
+  return days.map((day) => {
+    const log = logs.find((l) => l.habit_id === habitId && l.log_date === day);
+    return log ? log.status : "empty";
+  });
+}
+
+/** Geaggregeerde skip-redenen (exclusief bewust "overslaan"), meest
+ * voorkomende eerst — input voor latere patroonanalyse (§6). */
+export function aggregateSkipReasons(
+  logs: HabitLog[],
+  sinceDate: string,
+): { reason: SkipReason; count: number }[] {
+  const counts = new Map<SkipReason, number>();
+  for (const l of logs) {
+    if (l.status !== "skipped") continue;
+    if (l.log_date < sinceDate) continue;
+    if (!l.skip_reason || l.skip_reason === "niet_van_toepassing") continue;
+    counts.set(l.skip_reason, (counts.get(l.skip_reason) ?? 0) + 1);
+  }
+  return [...counts.entries()]
+    .map(([reason, count]) => ({ reason, count }))
+    .sort((a, b) => b.count - a.count);
+}
+
+/** Eerste dag (YYYY-MM-DD) van de kalendermaand waarin `date` valt. */
+export function startOfMonth(date: Date): string {
+  return toDateKey(new Date(date.getFullYear(), date.getMonth(), 1));
+}

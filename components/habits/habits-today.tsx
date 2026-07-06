@@ -2,10 +2,12 @@
 
 import { useMemo, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
-import type { Habit, HabitLog, SkipReason } from "@/lib/supabase/types";
+import type { Habit, HabitLog, HabitMetric, SkipReason } from "@/lib/supabase/types";
 import {
+  createHabitMetric,
   dailyConsistency,
   lastNDays,
+  shouldPromptMetric,
   startOfWeek,
   toDateKey,
   upsertHabitLog,
@@ -13,6 +15,7 @@ import {
 } from "@/lib/habits";
 import { HabitCard } from "./habit-card";
 import { SkipReasonSheet } from "./skip-reason-sheet";
+import { MetricPromptSheet } from "./metric-prompt-sheet";
 
 interface HabitsTodayProps {
   userId: string;
@@ -20,18 +23,34 @@ interface HabitsTodayProps {
   /** Logs over een venster dat zowel de laatste 7 dagen (daily-consistentie)
    * als deze week (weekly_count-voortgang) dekt — zie fetch in de pagina. */
   initialLogs: HabitLog[];
+  /** Recente metingen van track_metric-habits, voor de metric-prompt-check. */
+  initialMetrics?: HabitMetric[];
   /** Aanwezig wanneer dit scherm de vervolgstap is op de check-in flow; toont
    * een "klaar"-knop die de hele flow afsluit. */
   onDone?: () => void;
+  /** Geeft de actuele logs/metrics terug aan de aanroeper — nodig wanneer een
+   * volgende stap (zoals het afsluit-inzicht) erop moet kunnen rekenen. */
+  onLogsChange?: (logs: HabitLog[]) => void;
+  onMetricsChange?: (metrics: HabitMetric[]) => void;
 }
 
 /** "Habits vandaag" — kern van de habits-module. Wordt zowel getoond als
  * vervolgstap op de check-in (components/logger/emotion-logger.tsx) als via
  * de aparte "habits"-navigatietab (app/habits/page.tsx). */
-export function HabitsToday({ userId, habits, initialLogs, onDone }: HabitsTodayProps) {
+export function HabitsToday({
+  userId,
+  habits,
+  initialLogs,
+  initialMetrics = [],
+  onDone,
+  onLogsChange,
+  onMetricsChange,
+}: HabitsTodayProps) {
   const supabase = useMemo(() => createClient(), []);
   const [logs, setLogs] = useState<HabitLog[]>(initialLogs);
+  const [metrics, setMetrics] = useState<HabitMetric[]>(initialMetrics);
   const [skipTarget, setSkipTarget] = useState<Habit | null>(null);
+  const [metricTarget, setMetricTarget] = useState<Habit | null>(null);
   const [editingTarget, setEditingTarget] = useState<string | null>(null);
   const [pending, setPending] = useState<string | null>(null);
 
@@ -62,15 +81,38 @@ export function HabitsToday({ userId, habits, initialLogs, onDone }: HabitsToday
         skipReason,
         note,
       });
-      setLogs((cur) => [
-        ...cur.filter((l) => !(l.habit_id === habit.id && l.log_date === today)),
+      const nextLogs = [
+        ...logs.filter((l) => !(l.habit_id === habit.id && l.log_date === today)),
         row,
-      ]);
+      ];
+      setLogs(nextLogs);
+      onLogsChange?.(nextLogs);
       setEditingTarget(null);
+
+      if (status === "done" && shouldPromptMetric(habit, metrics)) {
+        setMetricTarget(habit);
+      }
     } catch (e) {
       console.error("Habit-log opslaan mislukt:", e);
     } finally {
       setPending(null);
+    }
+  }
+
+  async function submitMetric(habit: Habit, value: number) {
+    try {
+      const row = await createHabitMetric(supabase, userId, {
+        habitId: habit.id,
+        measuredOn: today,
+        value,
+      });
+      const nextMetrics = [...metrics, row];
+      setMetrics(nextMetrics);
+      onMetricsChange?.(nextMetrics);
+    } catch (e) {
+      console.error("Metric opslaan mislukt:", e);
+    } finally {
+      setMetricTarget(null);
     }
   }
 
@@ -121,6 +163,14 @@ export function HabitsToday({ userId, habits, initialLogs, onDone }: HabitsToday
             void applyLog(skipTarget, "skipped", reason, note);
             setSkipTarget(null);
           }}
+        />
+      )}
+
+      {metricTarget && (
+        <MetricPromptSheet
+          habit={metricTarget}
+          onClose={() => setMetricTarget(null)}
+          onSubmit={(value) => void submitMetric(metricTarget, value)}
         />
       )}
     </div>

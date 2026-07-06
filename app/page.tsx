@@ -4,6 +4,7 @@ import { fetchCheckins } from "@/lib/checkins";
 import {
   fetchActiveHabits,
   fetchHabitLogs,
+  fetchHabitMetricsForHabits,
   lastNDays,
   startOfWeek,
   toDateKey,
@@ -37,6 +38,8 @@ export default async function Home() {
     fetchActiveHabits(supabase),
     fetchHabitLogs(supabase, rangeStart, toDateKey(today)),
   ]);
+  const metricHabitIds = habits.filter((h) => h.track_metric).map((h) => h.id);
+  const habitMetrics = await fetchHabitMetricsForHabits(supabase, metricHabitIds);
 
   return (
     <main className="font-plex relative mx-auto flex h-dvh max-w-md flex-col overflow-hidden bg-[#0B0C0D] text-[#E9EBEA]">
@@ -45,6 +48,7 @@ export default async function Home() {
         initialCheckins={checkins}
         habits={habits}
         habitLogs={habitLogs}
+        habitMetrics={habitMetrics}
       />
       <BottomNav />
     </main>
