@@ -84,10 +84,8 @@ export type PlanItemInsert = Pick<PlanItem, "title" | "daily_plan_id"> &
     >
   >;
 
-/** Velden die bij een update gewijzigd mogen worden. */
-export type PlanItemUpdate = Partial<
-  Omit<PlanItemInsert, "title" | "daily_plan_id">
-> &
+/** Velden die bij een update gewijzigd mogen worden (incl. daily_plan_id, voor "naar morgen verplaatsen"). */
+export type PlanItemUpdate = Partial<Omit<PlanItemInsert, "title">> &
   Partial<Pick<PlanItem, "title">>;
 
 /** Losse, datumloze gedachte — geen onderdeel van een dagplanning. */

@@ -4,9 +4,15 @@ import { taskColor, taskColorMix } from "@/lib/task-colors";
 import { addMin, fmtDur } from "@/lib/planner-time";
 import type { TaskColor } from "@/lib/supabase/types";
 
-/** Bewerk-staat van een al ingepland item (aanmaken gebeurt via de braindump + sleep-naar-tijdlijn flow). */
+/**
+ * Sheet-staat: "create" bij een nieuw item (tik op een leeg tijdstip op de
+ * tijdlijn), "edit" bij een al bestaand item (tik op een blok). Alleen in
+ * create-mode krijgt het titelveld autofocus/toetsenbord — bij edit wil je
+ * niet dat tikken op een blok meteen het toetsenbord opent.
+ */
 export interface SheetState {
-  itemId: string;
+  mode: "create" | "edit";
+  itemId: string | null;
   title: string;
   start: string; // HH:MM
   dur: number; // minuten
@@ -60,7 +66,7 @@ export function TaskSheet({ sheet, onClose, onPatch, onSave, onDelete }: TaskShe
             value={sheet.title}
             onChange={(e) => onPatch({ title: e.target.value })}
             placeholder="Structureer je dag"
-            autoFocus
+            autoFocus={sheet.mode === "create"}
             className="w-full border-none bg-transparent p-0 text-xl font-medium text-[#E9EBEA] outline-none placeholder:text-[#565C60]"
           />
         </div>
@@ -110,30 +116,32 @@ export function TaskSheet({ sheet, onClose, onPatch, onSave, onDelete }: TaskShe
           className="mb-[22px] w-full rounded-[10px] border border-white/10 bg-[#0F1112] px-3 py-[11px] text-[13px] text-[#E9EBEA] outline-none placeholder:text-[#565C60]"
         />
 
-        {/* Acties: verwijderen + terug naar braindump + opslaan */}
+        {/* Acties: verwijderen (alleen bij bestaand item) + opslaan */}
         <div className="flex items-center gap-3">
-          <button
-            type="button"
-            onClick={onDelete}
-            aria-label="Item verwijderen"
-            className="flex size-[50px] flex-none items-center justify-center rounded-[14px] border border-white/10 bg-transparent text-[#9AA0A3]"
-          >
-            <svg width="16" height="17" viewBox="0 0 16 17" fill="none">
-              <path
-                d="M2 4h12M6 4V2.5h4V4M4 4l.8 11h6.4L12 4M6.5 7v5M9.5 7v5"
-                stroke="currentColor"
-                strokeWidth="1.3"
-                strokeLinecap="round"
-              />
-            </svg>
-          </button>
+          {sheet.mode === "edit" && (
+            <button
+              type="button"
+              onClick={onDelete}
+              aria-label="Item verwijderen"
+              className="flex size-[50px] flex-none items-center justify-center rounded-[14px] border border-white/10 bg-transparent text-[#9AA0A3]"
+            >
+              <svg width="16" height="17" viewBox="0 0 16 17" fill="none">
+                <path
+                  d="M2 4h12M6 4V2.5h4V4M4 4l.8 11h6.4L12 4M6.5 7v5M9.5 7v5"
+                  stroke="currentColor"
+                  strokeWidth="1.3"
+                  strokeLinecap="round"
+                />
+              </svg>
+            </button>
+          )}
           <button
             type="button"
             onClick={onSave}
             disabled={!canSave}
             className="h-[50px] flex-1 rounded-[14px] border-none bg-[#E9EBEA] text-sm font-medium text-[#0B0C0D] disabled:pointer-events-none disabled:opacity-35"
           >
-            Bijwerken
+            {sheet.mode === "edit" ? "Bijwerken" : "Taak aanmaken"}
           </button>
         </div>
       </div>

@@ -11,18 +11,22 @@ import {
 import { taskColor, taskColorMix } from "@/lib/task-colors";
 import {
   clampMinutesOfDay,
+  isoDate,
   minToTime,
   normalizeTime,
   snap,
   toMin,
 } from "@/lib/planner-time";
+import { getOrCreateDailyPlan } from "@/lib/daily-plans";
 import { BottomNav } from "@/components/nav/bottom-nav";
 import { TaskSheet, type SheetState } from "./task-sheet";
 import { BraindumpList } from "./braindump-list";
 import { InboxStrip } from "./inbox-strip";
 import {
   createBraindumpItem,
+  createScheduledItem,
   deletePlanItem,
+  moveItemToPlan,
   scheduleItem,
   setPlanItemCompleted,
   updatePlanItemDetails,
@@ -35,6 +39,8 @@ const MINUTE_PX = 1;
 const GRID_HEIGHT = 1440;
 const DEFAULT_DURATION = 30;
 const TAP_THRESHOLD_MIN = 6; // kleiner verschil dan dit tijdens een block-drag = tik (opent sheet)
+const LONG_PRESS_MS = 480;
+const LONG_PRESS_CANCEL_PX = 8; // meer beweging dan dit tijdens het indrukken = geen long-press meer
 
 interface PlannerAppProps {
   userId: string;
@@ -88,10 +94,42 @@ export function PlannerApp({
   const [inboxExpanded, setInboxExpanded] = useState(false);
   const [sheet, setSheet] = useState<SheetState | null>(null);
   const [drag, setDrag] = useState<DragState | null>(null);
+  const [actionMenuItem, setActionMenuItem] = useState<PlanItem | null>(null);
 
   const gridRef = useRef<HTMLDivElement | null>(null);
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const didScrollRef = useRef(false);
+  const gridPressStartRef = useRef<{ x: number; y: number } | null>(null);
+  const longPressTimerRef = useRef<number | null>(null);
+  const longPressFiredRef = useRef(false);
+  const pressStartRef = useRef<{ x: number; y: number } | null>(null);
+
+  // ---- long-press (elk sleepbaar item): opent het verwijderen/verplaatsen-menu ----
+  function startLongPress(item: PlanItem, x: number, y: number) {
+    pressStartRef.current = { x, y };
+    longPressFiredRef.current = false;
+    if (longPressTimerRef.current) window.clearTimeout(longPressTimerRef.current);
+    longPressTimerRef.current = window.setTimeout(() => {
+      longPressFiredRef.current = true;
+      setDrag(null);
+      setActionMenuItem(item);
+    }, LONG_PRESS_MS);
+  }
+  function checkLongPressCancel(x: number, y: number) {
+    const start = pressStartRef.current;
+    if (!start || !longPressTimerRef.current) return;
+    if (Math.hypot(x - start.x, y - start.y) > LONG_PRESS_CANCEL_PX) {
+      window.clearTimeout(longPressTimerRef.current);
+      longPressTimerRef.current = null;
+    }
+  }
+  function clearLongPress() {
+    if (longPressTimerRef.current) {
+      window.clearTimeout(longPressTimerRef.current);
+      longPressTimerRef.current = null;
+    }
+    pressStartRef.current = null;
+  }
 
   const unscheduled = items
     .filter((i) => i.status === "unscheduled")
@@ -169,7 +207,7 @@ export function PlannerApp({
     }
   }
 
-  // ---- drag: braindump-item naar tijdlijn slepen ----
+  // ---- drag: braindump-item naar tijdlijn slepen (+ long-press voor het actiemenu) ----
   function onBraindumpPointerDown(e: React.PointerEvent, item: PlanItem) {
     e.currentTarget.setPointerCapture(e.pointerId);
     setDrag({
@@ -183,9 +221,11 @@ export function PlannerApp({
       overGrid: false,
       previewMin: null,
     });
+    startLongPress(item, e.clientX, e.clientY);
   }
 
   function onBraindumpPointerMove(e: React.PointerEvent, item: PlanItem) {
+    checkLongPressCancel(e.clientX, e.clientY);
     setDrag((d) => {
       if (!d || d.kind !== "braindump" || d.itemId !== item.id || d.pointerId !== e.pointerId)
         return d;
@@ -207,6 +247,12 @@ export function PlannerApp({
   }
 
   function onBraindumpPointerUp(e: React.PointerEvent, item: PlanItem) {
+    clearLongPress();
+    if (longPressFiredRef.current) {
+      longPressFiredRef.current = false;
+      setDrag(null);
+      return;
+    }
     setDrag((d) => {
       if (!d || d.kind !== "braindump" || d.itemId !== item.id || d.pointerId !== e.pointerId)
         return null;
@@ -243,7 +289,7 @@ export function PlannerApp({
     }
   }
 
-  // ---- drag: ingepland blok verplaatsen ----
+  // ---- drag: ingepland blok verplaatsen (+ long-press voor het actiemenu) ----
   function onBlockPointerDown(e: React.PointerEvent, item: PlanItem) {
     e.stopPropagation();
     e.currentTarget.setPointerCapture(e.pointerId);
@@ -256,9 +302,11 @@ export function PlannerApp({
       baseStartMin,
       deltaMin: 0,
     });
+    startLongPress(item, e.clientX, e.clientY);
   }
 
   function onBlockPointerMove(e: React.PointerEvent, item: PlanItem) {
+    checkLongPressCancel(e.clientX, e.clientY);
     setDrag((d) => {
       if (!d || d.kind !== "move" || d.itemId !== item.id || d.pointerId !== e.pointerId)
         return d;
@@ -267,6 +315,12 @@ export function PlannerApp({
   }
 
   function onBlockPointerUp(e: React.PointerEvent, item: PlanItem) {
+    clearLongPress();
+    if (longPressFiredRef.current) {
+      longPressFiredRef.current = false;
+      setDrag(null);
+      return;
+    }
     setDrag((d) => {
       if (!d || d.kind !== "move" || d.itemId !== item.id || d.pointerId !== e.pointerId)
         return null;
@@ -361,9 +415,10 @@ export function PlannerApp({
     return { top, dur };
   }
 
-  // ---- sheet (bewerken van een al ingepland item) ----
+  // ---- sheet: bewerken van een bestaand item, of aanmaken op een leeg tijdstip ----
   function openEdit(item: PlanItem) {
     setSheet({
+      mode: "edit",
       itemId: item.id,
       title: item.title,
       start: normalizeTime(item.planned_start_time) ?? "09:00",
@@ -373,17 +428,67 @@ export function PlannerApp({
     });
   }
 
+  function openCreate(startMin: number) {
+    setSheet({
+      mode: "create",
+      itemId: null,
+      title: "",
+      start: minToTime(startMin),
+      dur: DEFAULT_DURATION,
+      note: "",
+      color: TASK_COLORS[items.length % TASK_COLORS.length],
+    });
+  }
+
   const patchSheet = (patch: Partial<SheetState>) =>
     setSheet((s) => (s ? { ...s, ...patch } : s));
 
   async function saveSheet() {
     if (!sheet || !sheet.title.trim()) return;
     const s = sheet;
-    const prev = items.find((i) => i.id === s.itemId) ?? null;
+
+    if (s.mode === "create") {
+      setSheet(null);
+      const tempId = "temp-" + Date.now();
+      const optimistic: PlanItem = {
+        id: tempId,
+        daily_plan_id: dailyPlan.id,
+        user_id: userId,
+        title: s.title.trim(),
+        notes: s.note.trim() || null,
+        status: "scheduled",
+        planned_start_time: s.start,
+        planned_duration_minutes: s.dur,
+        sort_order: 0,
+        color: s.color,
+        completed: false,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      };
+      setItems((cur) => [...cur, optimistic]);
+      try {
+        const row = await createScheduledItem(supabase, userId, dailyPlan.id, {
+          title: optimistic.title,
+          notes: optimistic.notes,
+          planned_start_time: s.start,
+          planned_duration_minutes: s.dur,
+          color: s.color,
+        });
+        setItems((cur) => cur.map((i) => (i.id === tempId ? row : i)));
+      } catch (e) {
+        console.error("Taak aanmaken mislukt:", e);
+        setItems((cur) => cur.filter((i) => i.id !== tempId));
+      }
+      return;
+    }
+
+    if (!s.itemId) return;
+    const itemId = s.itemId;
+    const prev = items.find((i) => i.id === itemId) ?? null;
     setSheet(null);
     setItems((cur) =>
       cur.map((i) =>
-        i.id === s.itemId
+        i.id === itemId
           ? {
               ...i,
               title: s.title.trim(),
@@ -396,23 +501,23 @@ export function PlannerApp({
     );
     try {
       await Promise.all([
-        updateScheduledItem(supabase, s.itemId, {
+        updateScheduledItem(supabase, itemId, {
           planned_start_time: s.start,
           planned_duration_minutes: s.dur,
         }),
-        updatePlanItemDetails(supabase, s.itemId, {
+        updatePlanItemDetails(supabase, itemId, {
           title: s.title.trim(),
           notes: s.note.trim() || null,
         }),
       ]);
     } catch (e) {
       console.error("Bijwerken mislukt:", e);
-      if (prev) setItems((cur) => cur.map((i) => (i.id === s.itemId ? prev : i)));
+      if (prev) setItems((cur) => cur.map((i) => (i.id === itemId ? prev : i)));
     }
   }
 
   async function deleteFromSheet() {
-    if (!sheet) return;
+    if (!sheet || !sheet.itemId) return;
     const id = sheet.itemId;
     setSheet(null);
     const prev = items;
@@ -421,6 +526,34 @@ export function PlannerApp({
       await deletePlanItem(supabase, id);
     } catch (e) {
       console.error("Verwijderen mislukt:", e);
+      setItems(prev);
+    }
+  }
+
+  // ---- actiemenu (long-press): verwijderen of naar morgen verplaatsen ----
+  async function deleteItemDirect(item: PlanItem) {
+    setActionMenuItem(null);
+    const prev = items;
+    setItems((cur) => cur.filter((i) => i.id !== item.id));
+    try {
+      await deletePlanItem(supabase, item.id);
+    } catch (e) {
+      console.error("Verwijderen mislukt:", e);
+      setItems(prev);
+    }
+  }
+
+  async function moveToTomorrow(item: PlanItem) {
+    setActionMenuItem(null);
+    const prev = items;
+    setItems((cur) => cur.filter((i) => i.id !== item.id));
+    try {
+      const tomorrow = new Date();
+      tomorrow.setDate(tomorrow.getDate() + 1);
+      const tomorrowPlan = await getOrCreateDailyPlan(supabase, userId, isoDate(tomorrow));
+      await moveItemToPlan(supabase, item.id, tomorrowPlan.id, 0);
+    } catch (e) {
+      console.error("Verplaatsen naar morgen mislukt:", e);
       setItems(prev);
     }
   }
@@ -471,10 +604,23 @@ export function PlannerApp({
     }
   }
 
+  // ---- tijdlijn: tik op een leeg tijdstip = meteen een nieuw item aanmaken ----
+  function onGridPointerDown(e: React.PointerEvent<HTMLDivElement>) {
+    gridPressStartRef.current = { x: e.clientX, y: e.clientY };
+  }
+  function onGridPointerUp(e: React.PointerEvent<HTMLDivElement>) {
+    const start = gridPressStartRef.current;
+    gridPressStartRef.current = null;
+    if (!start || Math.hypot(e.clientX - start.x, e.clientY - start.y) > 6) return;
+    const rect = gridRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    openCreate(clampMinutesOfDay(snap(e.clientY - rect.top)));
+  }
+
   const draggingBraindumpId = drag?.kind === "braindump" ? drag.itemId : null;
 
   return (
-    <main className="font-plex relative mx-auto flex h-dvh max-w-md flex-col overflow-hidden bg-[#0B0C0D] text-[#E9EBEA]">
+    <main className="font-plex relative mx-auto flex h-dvh max-w-md flex-col overflow-hidden bg-[#0B0C0D] text-[#E9EBEA] select-none">
       {/* Kop: alleen de datum, geen instellingen/inbox meer bovenaan */}
       <div className="flex flex-none items-baseline justify-between px-5 pt-5 pb-1">
         <span className="text-[15px] font-medium text-[#D7DADA] capitalize">
@@ -513,7 +659,13 @@ export function PlannerApp({
 
       {/* Tijdlijn */}
       <div ref={scrollRef} className="relative flex-1 overflow-y-auto overflow-x-hidden">
-        <div ref={gridRef} className="relative" style={{ height: `${GRID_HEIGHT}px` }}>
+        <div
+          ref={gridRef}
+          onPointerDown={onGridPointerDown}
+          onPointerUp={onGridPointerUp}
+          className="relative"
+          style={{ height: `${GRID_HEIGHT}px` }}
+        >
           {hourMarks.map((hm) => (
             <div key={hm.hour}>
               <div
@@ -660,6 +812,37 @@ export function PlannerApp({
           onSave={() => void saveSheet()}
           onDelete={() => void deleteFromSheet()}
         />
+      )}
+
+      {/* Actiemenu (long-press): verwijderen of naar morgen verplaatsen */}
+      {actionMenuItem && (
+        <div
+          onClick={() => setActionMenuItem(null)}
+          className="absolute inset-0 z-30 bg-[rgba(4,5,6,0.55)]"
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="mx-5 mt-16 overflow-hidden rounded-2xl border border-white/10 bg-[#15171A]"
+          >
+            <div className="truncate border-b border-white/5 px-4 py-3 text-[13px] text-[#9AA0A3]">
+              {actionMenuItem.title}
+            </div>
+            <button
+              type="button"
+              onClick={() => void moveToTomorrow(actionMenuItem)}
+              className="block w-full border-b border-white/5 px-4 py-3.5 text-left text-[14px] text-[#E9EBEA]"
+            >
+              Naar morgen verplaatsen
+            </button>
+            <button
+              type="button"
+              onClick={() => void deleteItemDirect(actionMenuItem)}
+              className="block w-full px-4 py-3.5 text-left text-[14px] text-[#FF6B6B]"
+            >
+              Verwijderen
+            </button>
+          </div>
+        </div>
       )}
     </main>
   );

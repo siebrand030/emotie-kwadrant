@@ -64,6 +64,33 @@ export async function createBraindumpItem(
   return data;
 }
 
+/** Nieuw, meteen ingepland item (tik-op-tijdstip-om-aan-te-maken). */
+export async function createScheduledItem(
+  supabase: Supabase,
+  userId: string,
+  dailyPlanId: string,
+  input: {
+    title: string;
+    notes: string | null;
+    planned_start_time: string;
+    planned_duration_minutes: number;
+    color: TaskColor;
+  },
+): Promise<PlanItem> {
+  const { data, error } = await typed(supabase)
+    .from("plan_items")
+    .insert({
+      user_id: userId,
+      daily_plan_id: dailyPlanId,
+      status: "scheduled",
+      ...input,
+    })
+    .select("*")
+    .single();
+  if (error) throw error;
+  return data;
+}
+
 /** Plant een braindump-item in op de tijdlijn (status → scheduled). */
 export async function scheduleItem(
   supabase: Supabase,
@@ -104,6 +131,30 @@ export async function unscheduleItem(
       status: "unscheduled",
       planned_start_time: null,
       planned_duration_minutes: null,
+    })
+    .eq("id", id);
+  if (error) throw error;
+}
+
+/**
+ * Verplaatst een item (braindump of ingepland) naar een andere daily_plan
+ * (bijv. "naar morgen verplaatsen"). Komt terecht in de braindump-lijst van
+ * die dag: tijd/duur worden gewist, status → unscheduled.
+ */
+export async function moveItemToPlan(
+  supabase: Supabase,
+  id: string,
+  targetDailyPlanId: string,
+  sortOrder: number,
+): Promise<void> {
+  const { error } = await typed(supabase)
+    .from("plan_items")
+    .update({
+      daily_plan_id: targetDailyPlanId,
+      status: "unscheduled",
+      planned_start_time: null,
+      planned_duration_minutes: null,
+      sort_order: sortOrder,
     })
     .eq("id", id);
   if (error) throw error;
