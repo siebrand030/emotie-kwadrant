@@ -126,6 +126,79 @@ export type CheckinInsert = Pick<Checkin, "quadrant" | "emotion"> &
 /** Velden die bij een update gewijzigd mogen worden. */
 export type CheckinUpdate = Partial<CheckinInsert>;
 
+// --- Habits-module: `habits`, `habit_logs`, `habit_metrics` ---
+
+export type HabitScheduleType = "daily" | "weekly_count";
+
+export type HabitLogStatus = "done" | "skipped";
+
+export type SkipReason =
+  | "geen_tijd"
+  | "vergeten"
+  | "pijn_of_moe"
+  | "geen_zin"
+  | "niet_van_toepassing"
+  | "anders";
+
+export type Habit = {
+  id: string;
+  user_id: string;
+  name: string;
+  description: string | null;
+  schedule_type: HabitScheduleType;
+  weekly_target: number | null; // alleen bij 'weekly_count'
+  track_metric: boolean;
+  metric_label: string | null;
+  metric_prompt_interval_days: number;
+  sort_order: number;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+};
+
+export type HabitInsert = Pick<Habit, "name" | "schedule_type"> &
+  Partial<
+    Pick<
+      Habit,
+      | "description"
+      | "weekly_target"
+      | "track_metric"
+      | "metric_label"
+      | "metric_prompt_interval_days"
+      | "sort_order"
+      | "is_active"
+    >
+  >;
+
+export type HabitUpdate = Partial<HabitInsert>;
+
+export type HabitLog = {
+  id: string;
+  habit_id: string;
+  user_id: string;
+  log_date: string; // YYYY-MM-DD
+  status: HabitLogStatus;
+  skip_reason: SkipReason | null;
+  note: string | null;
+  created_at: string;
+};
+
+export type HabitLogInsert = Pick<HabitLog, "habit_id" | "log_date" | "status"> &
+  Partial<Pick<HabitLog, "skip_reason" | "note">>;
+
+export type HabitLogUpdate = Partial<Omit<HabitLogInsert, "habit_id" | "log_date">>;
+
+export type HabitMetric = {
+  id: string;
+  habit_id: string;
+  user_id: string;
+  measured_on: string; // YYYY-MM-DD
+  value: number;
+  created_at: string;
+};
+
+export type HabitMetricInsert = Pick<HabitMetric, "habit_id" | "measured_on" | "value">;
+
 export type Database = {
   public: {
     Tables: {
@@ -139,6 +212,24 @@ export type Database = {
         Row: Checkin;
         Insert: CheckinInsert & { user_id: string };
         Update: CheckinUpdate;
+        Relationships: [];
+      };
+      habits: {
+        Row: Habit;
+        Insert: HabitInsert & { user_id: string };
+        Update: HabitUpdate;
+        Relationships: [];
+      };
+      habit_logs: {
+        Row: HabitLog;
+        Insert: HabitLogInsert & { user_id: string };
+        Update: HabitLogUpdate;
+        Relationships: [];
+      };
+      habit_metrics: {
+        Row: HabitMetric;
+        Insert: HabitMetricInsert & { user_id: string };
+        Update: Partial<HabitMetricInsert>;
         Relationships: [];
       };
     };

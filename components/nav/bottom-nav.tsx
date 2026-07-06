@@ -15,6 +15,11 @@ import { usePathname } from "next/navigation";
 const TABS = [
   { href: "/", label: "nu", isActive: (p: string) => p === "/" },
   {
+    href: "/habits",
+    label: "habits",
+    isActive: (p: string) => p.startsWith("/habits"),
+  },
+  {
     href: "/inzichten",
     label: "inzichten",
     isActive: (p: string) => p.startsWith("/inzichten"),
