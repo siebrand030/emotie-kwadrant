@@ -6,6 +6,7 @@ import type { DailyPlan, InboxItem, PlanItem } from "@/lib/supabase/types";
 import { sourceColor, taskColor, taskColorMix } from "@/lib/task-colors";
 import {
   clampMinutesOfDay,
+  defaultStart,
   isoDate,
   minToTime,
   normalizeTime,
@@ -241,16 +242,22 @@ export function PlannerApp({
   }
 
   function onBraindumpPointerUp(e: React.PointerEvent, item: PlanItem) {
+    const pressStart = pressStartRef.current;
     clearLongPress();
     if (longPressFiredRef.current) {
       longPressFiredRef.current = false;
       setDrag(null);
       return;
     }
+    const isTap =
+      pressStart != null &&
+      Math.hypot(e.clientX - pressStart.x, e.clientY - pressStart.y) < LONG_PRESS_CANCEL_PX;
     setDrag((d) => {
       if (!d || d.kind !== "braindump" || d.itemId !== item.id || d.pointerId !== e.pointerId)
         return null;
-      if (d.overGrid && d.previewMin != null) {
+      if (isTap) {
+        openSchedule(item);
+      } else if (d.overGrid && d.previewMin != null) {
         void handleScheduleDrop(item, d.previewMin);
       }
       return null;
@@ -434,6 +441,19 @@ export function PlannerApp({
     });
   }
 
+  /** Tik op een braindump-item: zelfde tijd/duur-flow als een bestaand blok, maar plant meteen in. */
+  function openSchedule(item: PlanItem) {
+    setSheet({
+      mode: "edit",
+      itemId: item.id,
+      title: item.title,
+      start: defaultStart(),
+      dur: DEFAULT_DURATION,
+      note: item.notes ?? "",
+      source: item.source,
+    });
+  }
+
   const patchSheet = (patch: Partial<SheetState>) =>
     setSheet((s) => (s ? { ...s, ...patch } : s));
 
@@ -478,6 +498,9 @@ export function PlannerApp({
     if (!s.itemId) return;
     const itemId = s.itemId;
     const prev = items.find((i) => i.id === itemId) ?? null;
+    // Vanuit de braindump-lijst getikt: dit item was nog 'unscheduled' en
+    // moet nu ook echt de status 'scheduled' krijgen (niet alleen tijd/duur).
+    const wasUnscheduled = prev?.status === "unscheduled";
     setSheet(null);
     setItems((cur) =>
       cur.map((i) =>
@@ -486,6 +509,7 @@ export function PlannerApp({
               ...i,
               title: s.title.trim(),
               notes: s.note.trim() || null,
+              status: "scheduled",
               planned_start_time: s.start,
               planned_duration_minutes: s.dur,
             }
@@ -494,10 +518,15 @@ export function PlannerApp({
     );
     try {
       await Promise.all([
-        updateScheduledItem(supabase, itemId, {
-          planned_start_time: s.start,
-          planned_duration_minutes: s.dur,
-        }),
+        wasUnscheduled
+          ? scheduleItem(supabase, itemId, {
+              planned_start_time: s.start,
+              planned_duration_minutes: s.dur,
+            })
+          : updateScheduledItem(supabase, itemId, {
+              planned_start_time: s.start,
+              planned_duration_minutes: s.dur,
+            }),
         updatePlanItemDetails(supabase, itemId, {
           title: s.title.trim(),
           notes: s.note.trim() || null,
