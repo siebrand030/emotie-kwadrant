@@ -21,8 +21,12 @@ import {
   type FactorValues,
 } from "@/lib/checkins";
 import { FactorSlider } from "./factor-slider";
+import { HabitsToday } from "@/components/habits/habits-today";
+import { HabitInsight } from "@/components/habits/habit-insight";
+import { pickInsight } from "@/lib/habits";
+import type { Habit, HabitLog, HabitMetric } from "@/lib/supabase/types";
 
-type Step = "pick" | "factors" | "tools";
+type Step = "pick" | "factors" | "tools" | "habits" | "insight";
 
 interface Flow {
   step: Step;
@@ -49,12 +53,26 @@ const fmtTime = (ts: number) =>
 interface EmotionLoggerProps {
   userId: string;
   initialCheckins: Checkin[];
+  habits: Habit[];
+  habitLogs: HabitLog[];
+  habitMetrics: HabitMetric[];
 }
 
-export function EmotionLogger({ userId, initialCheckins }: EmotionLoggerProps) {
+export function EmotionLogger({
+  userId,
+  initialCheckins,
+  habits,
+  habitLogs,
+  habitMetrics,
+}: EmotionLoggerProps) {
   const supabase = useMemo(() => createClient(), []);
   const [checkins, setCheckins] = useState<Checkin[]>(initialCheckins);
   const [flow, setFlow] = useState<Flow | null>(null);
+  // Gespiegelde habit-state: HabitsToday muteert dit onder de motorkap zodat
+  // het afsluit-inzicht (stap "insight") met de actuele logs/metrics kan
+  // rekenen i.p.v. de verouderde server-props.
+  const [liveHabitLogs, setLiveHabitLogs] = useState<HabitLog[]>(habitLogs);
+  const [liveHabitMetrics, setLiveHabitMetrics] = useState<HabitMetric[]>(habitMetrics);
 
   const today = new Date().toLocaleDateString("nl-NL", {
     weekday: "long",
@@ -91,10 +109,26 @@ export function EmotionLogger({ userId, initialCheckins }: EmotionLoggerProps) {
   function back() {
     setFlow((f) => {
       if (!f) return f;
+      if (f.step === "insight") return { ...f, step: "habits" };
+      if (f.step === "habits") return { ...f, step: "tools" };
       if (f.step === "tools") return { ...f, step: "factors" };
       if (f.step === "factors") return { ...f, step: "pick" };
       return null;
     });
+  }
+  // Check-in is de drager: na de tools-stap gaat de flow door naar de
+  // habits-stap in plaats van meteen af te sluiten (tenzij er geen actieve
+  // habits zijn — dan is er niets te tonen).
+  function advanceToHabitsOrFinish() {
+    setFlow((f) => {
+      if (!f) return f;
+      return habits.length > 0 ? { ...f, step: "habits" } : null;
+    });
+  }
+  // Na de habits-stap: precies één inzicht tonen (afsluitscherm), gebaseerd op
+  // de actuele (gespiegelde) logs/metrics.
+  function advanceToInsight() {
+    setFlow((f) => (f ? { ...f, step: "insight" } : f));
   }
   function setFactor(key: FactorKey, value: number) {
     setFlow((f) => (f ? { ...f, factors: { ...f.factors, [key]: value } } : f));
@@ -311,18 +345,56 @@ export function EmotionLogger({ userId, initialCheckins }: EmotionLoggerProps) {
           </div>
           <div className="mt-9 flex gap-[30px]">
             <button
-              onClick={finishFlow}
+              onClick={advanceToHabitsOrFinish}
               className="font-plex-mono p-2.5 text-[13px] text-[#6C7377]"
             >
               overslaan
             </button>
             <button
-              onClick={finishFlow}
+              onClick={advanceToHabitsOrFinish}
               className="font-plex-mono rounded-[22px] border border-white/20 px-[26px] py-2.5 text-[13px] text-[#E9EBEA]"
             >
               klaar
             </button>
           </div>
+        </Overlay>
+      )}
+
+      {flow && flow.step === "habits" && (
+        <Overlay onBack={back}>
+          <OverlayHead
+            color="#8FBF8A"
+            title="Habits vandaag"
+            sub="registreren is de motivator"
+          />
+          <div className="mt-[30px] w-full flex flex-1 flex-col items-center">
+            <HabitsToday
+              userId={userId}
+              habits={habits}
+              initialLogs={liveHabitLogs}
+              initialMetrics={liveHabitMetrics}
+              onDone={advanceToInsight}
+              onLogsChange={setLiveHabitLogs}
+              onMetricsChange={setLiveHabitMetrics}
+            />
+          </div>
+        </Overlay>
+      )}
+
+      {flow && flow.step === "insight" && (
+        <Overlay onBack={back}>
+          <OverlayHead color="#8FBF8A" title="Klaar" sub="tot morgen" />
+          <div className="mt-[30px] w-full max-w-[340px]">
+            <HabitInsight
+              insight={pickInsight(habits, liveHabitLogs, liveHabitMetrics)}
+            />
+          </div>
+          <button
+            onClick={finishFlow}
+            className="font-plex-mono mt-9 rounded-[22px] border border-white/20 px-[26px] py-2.5 text-[13px] text-[#E9EBEA]"
+          >
+            klaar
+          </button>
         </Overlay>
       )}
     </>

@@ -6,7 +6,14 @@ type CookieToSet = { name: string; value: string; options: CookieOptions };
 
 /** Routes die inloggen vereisen. "/" beschermt alleen de home exact (de
  *  prefix-check gebruikt `${prefix}/`, dus "//" matcht nooit andere paden). */
-const PROTECTED_PREFIXES = ["/", "/inzichten", "/tools", "/planner", "/inbox"];
+const PROTECTED_PREFIXES = [
+  "/",
+  "/inzichten",
+  "/tools",
+  "/planner",
+  "/inbox",
+  "/habits",
+];
 
 /**
  * Ververst de Supabase-sessie op elke request (tokens roteren) en beschermt
