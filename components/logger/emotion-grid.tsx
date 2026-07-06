@@ -5,7 +5,6 @@ import {
   animate,
   motion,
   useMotionValue,
-  useMotionValueEvent,
   useTransform,
   type MotionValue,
 } from "framer-motion";
@@ -25,8 +24,12 @@ const CELLS = emotionGridPositions();
 
 const GAP = 14;
 const CONTENT_OFFSET = 900; // overscan van de drag-hit-catcher; valt algebraïsch weg
-const SETTLE_MS = 90;
-const LOCK_SPRING = { type: "spring", stiffness: 500, damping: 34 } as const;
+// Zachte, kritisch gedempte veer (damping ≈ 2·√stiffness) — landt vloeiend op
+// het midden zonder doorschieten of "yank".
+const LOCK_SPRING = { type: "spring", stiffness: 420, damping: 40 } as const;
+
+const clamp = (v: number, lo: number, hi: number) =>
+  Math.min(hi, Math.max(lo, v));
 
 interface Metrics {
   cellW: number;
@@ -76,13 +79,21 @@ export function EmotionGrid({
   // frameRect is de rect van <main> (het app-frame), niet het browservenster
   // — op desktop staat dat frame gecentreerd en smaller (mx-auto max-w-md).
   const [size, setSize] = useState(() => ({ w: frameRect.width, h: frameRect.height }));
+  // Terwijl er actief gesleept wordt geen resize-reflow doorlaten: op mobiel
+  // klapt de adresbalk soms in/uit → de wrapper verandert van hoogte → de
+  // drag-constraints zouden herberekend worden en het rooster met een ruk in
+  // de nieuwe grenzen worden getrokken (voelde aan als willekeurig "slurpen").
+  const interacting = useRef(false);
 
   useEffect(() => {
     const el = wrapperRef.current;
     if (!el) return;
     const ro = new ResizeObserver(([entry]) => {
+      if (interacting.current) return;
       const { width, height } = entry.contentRect;
-      setSize({ w: width, h: height });
+      setSize((prev) =>
+        prev.w === width && prev.h === height ? prev : { w: width, h: height },
+      );
     });
     ro.observe(el);
     return () => ro.disconnect();
@@ -110,32 +121,27 @@ export function EmotionGrid({
   const x = useMotionValue(initialOffset.x);
   const y = useMotionValue(initialOffset.y);
   const [selected, setSelected] = useState(initialCell.name);
-  // True zolang de vinger/muis het rooster daadwerkelijk vasthoudt (tussen
-  // onDragStart en onDragEnd) — NIET hetzelfde als "x/y veranderen nog",
-  // want momentum laat x/y na loslaten nog even doorlopen.
-  const isDragging = useRef(false);
 
+  // Welke cel ligt op dit moment het dichtst bij het midden van het viewport?
+  // (Puur uit de huidige x/y afgeleid — geen momentum, dus dit ís waar je nu
+  // staat, niet waar een fling je heen gooit.)
   const nearestCell = useCallback((): EmotionCellPos | undefined => {
     const targetContentX = size.w / 2 - x.get();
     const targetContentY = size.h / 2 - y.get();
-    const col = Math.min(
+    const col = clamp(
+      Math.round((targetContentX - metrics.cellW / 2) / metrics.pitchX),
+      0,
       3,
-      Math.max(0, Math.round((targetContentX - metrics.cellW / 2) / metrics.pitchX)),
     );
-    const row = Math.min(
+    const row = clamp(
+      Math.round((targetContentY - metrics.cellH / 2) / metrics.pitchY),
+      0,
       3,
-      Math.max(0, Math.round((targetContentY - metrics.cellH / 2) / metrics.pitchY)),
     );
     return CELLS.find((c) => c.col === col && c.row === row);
   }, [metrics, size, x, y]);
 
-  const settleTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const clearSettleTimer = useCallback(() => {
-    if (settleTimer.current) clearTimeout(settleTimer.current);
-  }, []);
-
-  // Gedeeld door zowel het settle-na-slepen-pad als een directe tik op een
-  // vakje: zet de selectie en snapt 'm exact naar het midden.
+  // Zet de selectie + snapt exact naar het midden (gedeeld door tik + loslaten).
   const lockCell = useCallback(
     (cell: EmotionCellPos) => {
       setSelected(cell.name);
@@ -146,34 +152,23 @@ export function EmotionGrid({
     [centerOffsetFor, x, y],
   );
 
-  // Bij elke beweging: de "grootste"/dichtstbijzijnde cel is meteen de
-  // selectie (geen wachttijd) — dat bepaalt alleen het label/kleur van de
-  // verder-knop, niet de positie van het rooster zelf.
-  const trackNearestRealtime = useCallback(() => {
+  // Tijdens het slepen: laat het label meelopen met de cel die nu het dichtst
+  // bij het midden ligt — puur visueel, verplaatst het rooster niet.
+  const trackNearest = useCallback(() => {
     const cell = nearestCell();
     if (cell) setSelected((prev) => (prev === cell.name ? prev : cell.name));
   }, [nearestCell]);
 
-  // De exacte snap-naar-midden mag alleen na loslaten (of na uitdovende
-  // momentum) gebeuren — nooit terwijl er nog actief gesleept wordt, anders
-  // vecht de snap-animatie met de sleepbeweging zelf (voelde aan als
-  // "teruggetrokken worden" tijdens het pannen).
-  const scheduleSettle = useCallback(() => {
-    trackNearestRealtime();
-    clearSettleTimer();
-    if (isDragging.current) return;
-    settleTimer.current = setTimeout(() => {
-      const cell = nearestCell();
-      if (cell) lockCell(cell);
-    }, SETTLE_MS);
-  }, [clearSettleTimer, lockCell, nearestCell, trackNearestRealtime]);
+  // Bij loslaten: land netjes op de cel die op dát moment voor je neus staat.
+  const snapToNearest = useCallback(() => {
+    interacting.current = false;
+    const cell = nearestCell();
+    if (cell) lockCell(cell);
+  }, [nearestCell, lockCell]);
 
-  // Direct tikken op een vakje vergrendelt 'm meteen, zonder op de
-  // settle-debounce te wachten. Dit zit op de drag-hit-catcher zelf (niet op
-  // losse cellen) omdat Framer tap+drag alleen betrouwbaar op hetzelfde
-  // element arbitreert — twee aparte elementen laten een tik met een
-  // duimnagelbreedte "trilling" soms als (piepklein) drag-gebaar tellen, wat
-  // de tik-selectie meteen weer overschreef met de oude settle-berekening.
+  // Direct tikken op een vakje selecteert + centreert het meteen. Zit op de
+  // drag-hit-catcher zelf (niet op losse cellen) omdat Framer tap+drag alleen
+  // betrouwbaar op hetzelfde element arbitreert.
   const handleGridTap = useCallback(
     (_event: unknown, info: { point: { x: number; y: number } }) => {
       const el = wrapperRef.current;
@@ -181,25 +176,21 @@ export function EmotionGrid({
       const rect = el.getBoundingClientRect();
       const contentX = info.point.x - rect.left - x.get();
       const contentY = info.point.y - rect.top - y.get();
-      const col = Math.min(
+      const col = clamp(
+        Math.round((contentX - metrics.cellW / 2) / metrics.pitchX),
+        0,
         3,
-        Math.max(0, Math.round((contentX - metrics.cellW / 2) / metrics.pitchX)),
       );
-      const row = Math.min(
+      const row = clamp(
+        Math.round((contentY - metrics.cellH / 2) / metrics.pitchY),
+        0,
         3,
-        Math.max(0, Math.round((contentY - metrics.cellH / 2) / metrics.pitchY)),
       );
       const cell = CELLS.find((c) => c.col === col && c.row === row);
-      if (!cell) return;
-      clearSettleTimer();
-      lockCell(cell);
+      if (cell) lockCell(cell);
     },
-    [clearSettleTimer, lockCell, metrics, x, y],
+    [lockCell, metrics, x, y],
   );
-
-  useMotionValueEvent(x, "change", scheduleSettle);
-  useMotionValueEvent(y, "change", scheduleSettle);
-  useEffect(() => clearSettleTimer, [clearSettleTimer]);
 
   const dragConstraints = useMemo(
     () => ({
@@ -266,17 +257,17 @@ export function EmotionGrid({
           touchAction: "none",
         }}
         drag
-        dragElastic={0.12}
-        dragMomentum
-        dragTransition={{ power: 0.25, timeConstant: 240, restDelta: 0.5 }}
+        // Geen momentum: het rooster volgt de vinger 1-op-1 en stopt waar je
+        // loslaat — daarna landt snapToNearest netjes op de dichtstbijzijnde
+        // cel. Momentum gooide het rooster eerder meerdere cellen door.
+        dragMomentum={false}
+        dragElastic={0.06}
         dragConstraints={dragConstraints}
         onDragStart={() => {
-          isDragging.current = true;
-          clearSettleTimer();
+          interacting.current = true;
         }}
-        onDragEnd={() => {
-          isDragging.current = false;
-        }}
+        onDrag={trackNearest}
+        onDragEnd={snapToNearest}
         onTap={handleGridTap}
       >
         {CELLS.map((cell) => (
