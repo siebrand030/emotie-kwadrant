@@ -21,14 +21,14 @@ const DOT_STYLE: Record<"done" | "skipped" | "empty", string> = {
 };
 
 /** Weekoverzicht: per habit de laatste 7 dagen als dots, plus voor
- * track_metric-habits de lijngrafiek en (globaal) de meest voorkomende
- * skip-reden deze maand (§6). */
+ * track_metric-habits de lijngrafiek en (globaal) een verdeling van de
+ * skip-redenen deze maand — input voor latere patroonanalyse (§6, §9 fase 3). */
 export function HabitsWeekOverview({ habits, logs, metrics }: HabitsWeekOverviewProps) {
   const today = new Date();
   const last7 = lastNDays(7, today);
   const monthStart = startOfMonth(today);
   const skipReasons = aggregateSkipReasons(logs, monthStart);
-  const topReason = skipReasons[0];
+  const totalSkips = skipReasons.reduce((sum, r) => sum + r.count, 0);
 
   return (
     <div className="flex w-full max-w-[340px] flex-col gap-5">
@@ -55,11 +55,30 @@ export function HabitsWeekOverview({ habits, logs, metrics }: HabitsWeekOverview
         );
       })}
 
-      {topReason && (
-        <p className="font-plex-mono text-[11.5px] text-[#6C7377]">
-          Meest voorkomende reden bij niet gelukt:{" "}
-          {SKIP_REASON_LABELS[topReason.reason]} ({topReason.count}x deze maand)
-        </p>
+      {skipReasons.length > 0 && (
+        <div className="flex flex-col gap-2">
+          <span className="font-plex-mono text-[11.5px] text-[#565C60]">
+            skip-redenen deze maand ({totalSkips}x niet gelukt)
+          </span>
+          <div className="flex flex-col gap-1.5">
+            {skipReasons.map(({ reason, count }) => (
+              <div key={reason} className="flex items-center gap-2.5">
+                <span className="font-plex-mono w-24 flex-none text-[11.5px] text-[#8A9094]">
+                  {SKIP_REASON_LABELS[reason]}
+                </span>
+                <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-white/[0.06]">
+                  <div
+                    className="h-full rounded-full bg-[#565C60]"
+                    style={{ width: `${(count / totalSkips) * 100}%` }}
+                  />
+                </div>
+                <span className="font-plex-mono w-4 flex-none text-right text-[11.5px] text-[#565C60]">
+                  {count}
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
       )}
     </div>
   );

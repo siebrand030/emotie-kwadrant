@@ -1,9 +1,11 @@
 import type {
   Database,
   Habit,
+  HabitInsert,
   HabitLog,
   HabitLogStatus,
   HabitMetric,
+  HabitUpdate,
   SkipReason,
 } from "./supabase/types";
 import type { createClient } from "./supabase/client";
@@ -39,6 +41,62 @@ export async function fetchActiveHabits(supabase: Supabase): Promise<Habit[]> {
     .order("sort_order", { ascending: true });
   if (error) throw error;
   return data ?? [];
+}
+
+/** Alle habits van de gebruiker (incl. gedeactiveerde), voor het beheerscherm. */
+export async function fetchAllHabits(supabase: Supabase): Promise<Habit[]> {
+  const { data, error } = await typed(supabase)
+    .from("habits")
+    .select("*")
+    .order("sort_order", { ascending: true });
+  if (error) throw error;
+  return data ?? [];
+}
+
+/** Nieuwe habit aanmaken (beheerscherm). */
+export async function createHabit(
+  supabase: Supabase,
+  userId: string,
+  input: HabitInsert,
+): Promise<Habit> {
+  const { data, error } = await typed(supabase)
+    .from("habits")
+    .insert({ user_id: userId, ...input })
+    .select("*")
+    .single();
+  if (error) throw error;
+  return data;
+}
+
+/** Bestaande habit bijwerken (beheerscherm). */
+export async function updateHabit(
+  supabase: Supabase,
+  id: string,
+  patch: HabitUpdate,
+): Promise<Habit> {
+  const { data, error } = await typed(supabase)
+    .from("habits")
+    .update(patch)
+    .eq("id", id)
+    .select("*")
+    .single();
+  if (error) throw error;
+  return data;
+}
+
+/** Activeert/deactiveert een habit. Gedeactiveerd verdwijnt hij uit "vandaag"
+ * maar blijven historische logs/metrics zichtbaar in overzichten (edge case
+ * uit de feature-spec: geen historie verwijderen). */
+export async function setHabitActive(
+  supabase: Supabase,
+  id: string,
+  isActive: boolean,
+): Promise<void> {
+  const { error } = await typed(supabase)
+    .from("habits")
+    .update({ is_active: isActive })
+    .eq("id", id);
+  if (error) throw error;
 }
 
 /** Alle habit-logs van de gebruiker binnen een datumbereik (inclusief). */

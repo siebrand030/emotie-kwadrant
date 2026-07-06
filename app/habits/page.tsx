@@ -1,4 +1,5 @@
 import { redirect } from "next/navigation";
+import Link from "next/link";
 import { createClient } from "@/lib/supabase/server";
 import {
   fetchActiveHabits,
@@ -42,9 +43,17 @@ export default async function HabitsPage() {
       <div className="flex flex-1 flex-col items-center gap-9 px-[22px] pt-[34px] pb-6">
         <div className="flex w-full max-w-[340px] flex-col items-center gap-9">
           <div className="w-full">
-            <h1 className="font-plex-mono mb-5 text-[11.5px] text-[#565C60]">
-              habits vandaag
-            </h1>
+            <div className="mb-5 flex items-center justify-between">
+              <h1 className="font-plex-mono text-[11.5px] text-[#565C60]">
+                habits vandaag
+              </h1>
+              <Link
+                href="/habits/settings"
+                className="font-plex-mono text-[11.5px] text-[#6C7377]"
+              >
+                beheren ›
+              </Link>
+            </div>
             <HabitsToday
               userId={user.id}
               habits={habits}
