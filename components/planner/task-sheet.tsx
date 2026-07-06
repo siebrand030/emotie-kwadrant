@@ -116,7 +116,6 @@ export function TaskSheet({ sheet, onClose, onPatch, onSave, onDelete }: TaskShe
         <input
           value={sheet.note}
           onChange={(e) => onPatch({ note: e.target.value })}
-          placeholder="Notities, links of telefoonnummers..."
           className="mb-[22px] w-full rounded-[10px] border border-white/10 bg-[#0F1112] px-3 py-[11px] text-[13px] text-[#E9EBEA] outline-none placeholder:text-[#565C60]"
         />
 

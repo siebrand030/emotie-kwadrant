@@ -29,12 +29,19 @@ import {
 } from "@/lib/plan-items";
 import { createInboxItem, deleteInboxItem } from "@/lib/inbox";
 
-// 1px per minuut; 24u = 1440px hoge scroll-grid.
-const MINUTE_PX = 1;
-const GRID_HEIGHT = 1440;
+// 1.4px per minuut (i.p.v. 1px): zo past een half-uur-blok nog net het
+// compacte layout (zie COMPACT_HEIGHT) zonder over de buur heen te vallen.
+// Bloktop/-hoogte volgen hierdoor altijd exact de echte duur — geen
+// afgedwongen minimumhoogte meer, die veroorzaakte overlap tussen twee
+// aaneensluitende korte blokken.
+const MINUTE_PX = 1.4;
+const GRID_HEIGHT = 24 * 60 * MINUTE_PX;
 const DEFAULT_DURATION = 30;
 const TAP_THRESHOLD_MIN = 6; // kleiner verschil dan dit tijdens een block-drag = tik (opent sheet)
-const LONG_PRESS_MS = 480;
+// Blokken korter dan dit tonen alleen de titel (geen tijdspanne): daaronder
+// past de volledige twee-regel-layout niet meer zonder overlap te riskeren.
+const COMPACT_HEIGHT = 44;
+const LONG_PRESS_MS = 900; // ruim de tijd om tijdens het verplaatsen even te pauzeren zonder dat het actiemenu opent
 const LONG_PRESS_CANCEL_PX = 8; // meer beweging dan dit tijdens het indrukken = geen long-press meer
 
 interface PlannerAppProps {
@@ -227,7 +234,7 @@ export function PlannerApp({
         e.clientX <= rect.right
       ) {
         overGrid = true;
-        previewMin = clampMinutesOfDay(snap(e.clientY - rect.top));
+        previewMin = clampMinutesOfDay(snap((e.clientY - rect.top) / MINUTE_PX));
       }
       return { ...d, x: e.clientX, y: e.clientY, overGrid, previewMin };
     });
@@ -600,7 +607,7 @@ export function PlannerApp({
     if (!start || Math.hypot(e.clientX - start.x, e.clientY - start.y) > 6) return;
     const rect = gridRef.current?.getBoundingClientRect();
     if (!rect) return;
-    openCreate(clampMinutesOfDay(snap(e.clientY - rect.top)));
+    openCreate(clampMinutesOfDay(snap((e.clientY - rect.top) / MINUTE_PX)));
   }
 
   const draggingBraindumpId = drag?.kind === "braindump" ? drag.itemId : null;
@@ -686,7 +693,7 @@ export function PlannerApp({
           {drag?.kind === "braindump" && drag.overGrid && drag.previewMin != null && (
             <div
               className="absolute right-[14px] left-[52px] z-[5]"
-              style={{ top: `${drag.previewMin}px` }}
+              style={{ top: `${drag.previewMin * MINUTE_PX}px` }}
             >
               <div
                 className="border-t-2 border-dashed"
@@ -709,11 +716,18 @@ export function PlannerApp({
 
           {scheduled.map((t) => {
             const { top, dur } = blockGeometry(t);
-            const height = Math.max(dur * MINUTE_PX, 44);
+            // Geen afgedwongen minimumhoogte: de hoogte volgt altijd exact de
+            // duur, anders overlapt een kort blok met de buur eronder.
+            const height = dur * MINUTE_PX;
+            const compact = height < COMPACT_HEIGHT;
             const done = t.completed;
             const color = sourceColor(t.source);
             const isDragging =
               drag != null && drag.kind !== "braindump" && drag.itemId === t.id;
+            const titleStyle: React.CSSProperties = {
+              color: done ? "#565C60" : "#E9EBEA",
+              textDecoration: done ? "line-through" : "none",
+            };
             return (
               <div
                 key={t.id}
@@ -721,9 +735,14 @@ export function PlannerApp({
                 onPointerMove={(e) => onBlockPointerMove(e, t)}
                 onPointerUp={(e) => onBlockPointerUp(e, t)}
                 onPointerCancel={(e) => onBlockPointerUp(e, t)}
-                className="absolute right-[14px] left-[52px] flex cursor-grab flex-col justify-center gap-0.5 rounded-[10px] border border-l-[3px] px-2.5 py-1.5 pr-[34px] active:cursor-grabbing"
+                className={
+                  "absolute right-[14px] left-[52px] cursor-grab rounded-[10px] border border-l-[3px] active:cursor-grabbing " +
+                  (compact
+                    ? "flex items-center gap-1.5 px-2 py-0"
+                    : "flex flex-col justify-center gap-0.5 px-2.5 py-1.5 pr-[34px]")
+                }
                 style={{
-                  top: `${top}px`,
+                  top: `${top * MINUTE_PX}px`,
                   height: `${height}px`,
                   background: taskColorMix(color, 14),
                   borderColor: taskColorMix(color, 32),
@@ -733,34 +752,57 @@ export function PlannerApp({
                   zIndex: isDragging ? 6 : 2,
                 }}
               >
-                <span className="font-plex-mono text-[10.5px] text-[#9AA0A3]">
-                  {minToTime(top)} – {minToTime(top + dur)}
-                </span>
-                <span
-                  className="truncate text-sm font-semibold"
-                  style={{
-                    color: done ? "#565C60" : "#E9EBEA",
-                    textDecoration: done ? "line-through" : "none",
-                  }}
-                >
-                  {t.title}
-                </span>
-                <button
-                  type="button"
-                  onPointerDown={(e) => e.stopPropagation()}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    void toggleComplete(t);
-                  }}
-                  aria-label={done ? "Afvinken ongedaan maken" : "Afvinken"}
-                  className="absolute top-[7px] right-[7px] flex size-[22px] items-center justify-center rounded-full border-[1.5px] text-[11px] font-semibold text-[#0B0C0D] transition-colors"
-                  style={{
-                    borderColor: taskColor(color),
-                    background: done ? taskColor(color) : "transparent",
-                  }}
-                >
-                  {done ? "✓" : ""}
-                </button>
+                {compact ? (
+                  <>
+                    <span
+                      className="flex-1 truncate text-[11.5px] font-semibold"
+                      style={titleStyle}
+                    >
+                      {t.title}
+                    </span>
+                    <button
+                      type="button"
+                      onPointerDown={(e) => e.stopPropagation()}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        void toggleComplete(t);
+                      }}
+                      aria-label={done ? "Afvinken ongedaan maken" : "Afvinken"}
+                      className="flex size-[15px] flex-none items-center justify-center rounded-full border-[1.5px] text-[8px] font-semibold text-[#0B0C0D] transition-colors"
+                      style={{
+                        borderColor: taskColor(color),
+                        background: done ? taskColor(color) : "transparent",
+                      }}
+                    >
+                      {done ? "✓" : ""}
+                    </button>
+                  </>
+                ) : (
+                  <>
+                    <span className="font-plex-mono text-[10.5px] text-[#9AA0A3]">
+                      {minToTime(top)} – {minToTime(top + dur)}
+                    </span>
+                    <span className="truncate text-sm font-semibold" style={titleStyle}>
+                      {t.title}
+                    </span>
+                    <button
+                      type="button"
+                      onPointerDown={(e) => e.stopPropagation()}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        void toggleComplete(t);
+                      }}
+                      aria-label={done ? "Afvinken ongedaan maken" : "Afvinken"}
+                      className="absolute top-[7px] right-[7px] flex size-[22px] items-center justify-center rounded-full border-[1.5px] text-[11px] font-semibold text-[#0B0C0D] transition-colors"
+                      style={{
+                        borderColor: taskColor(color),
+                        background: done ? taskColor(color) : "transparent",
+                      }}
+                    >
+                      {done ? "✓" : ""}
+                    </button>
+                  </>
+                )}
                 {/* Resize-handle: onderkant slepen om de duur aan te passen */}
                 <div
                   onPointerDown={(e) => onResizePointerDown(e, t)}
@@ -768,7 +810,10 @@ export function PlannerApp({
                   onPointerUp={(e) => onResizePointerUp(e, t)}
                   onPointerCancel={(e) => onResizePointerUp(e, t)}
                   style={{ touchAction: "none" }}
-                  className="absolute inset-x-0 bottom-0 flex h-3.5 cursor-row-resize items-end justify-center pb-[3px]"
+                  className={
+                    "absolute inset-x-0 bottom-0 flex cursor-row-resize items-end justify-center " +
+                    (compact ? "h-[6px] pb-px" : "h-3.5 pb-[3px]")
+                  }
                 >
                   <span className="h-[3px] w-6 rounded-full bg-white/25" />
                 </div>
