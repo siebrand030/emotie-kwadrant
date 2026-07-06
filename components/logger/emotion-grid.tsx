@@ -110,6 +110,24 @@ export function EmotionGrid({
   const x = useMotionValue(initialOffset.x);
   const y = useMotionValue(initialOffset.y);
   const [selected, setSelected] = useState(initialCell.name);
+  // True zolang de vinger/muis het rooster daadwerkelijk vasthoudt (tussen
+  // onDragStart en onDragEnd) — NIET hetzelfde als "x/y veranderen nog",
+  // want momentum laat x/y na loslaten nog even doorlopen.
+  const isDragging = useRef(false);
+
+  const nearestCell = useCallback((): EmotionCellPos | undefined => {
+    const targetContentX = size.w / 2 - x.get();
+    const targetContentY = size.h / 2 - y.get();
+    const col = Math.min(
+      3,
+      Math.max(0, Math.round((targetContentX - metrics.cellW / 2) / metrics.pitchX)),
+    );
+    const row = Math.min(
+      3,
+      Math.max(0, Math.round((targetContentY - metrics.cellH / 2) / metrics.pitchY)),
+    );
+    return CELLS.find((c) => c.col === col && c.row === row);
+  }, [metrics, size, x, y]);
 
   const settleTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const clearSettleTimer = useCallback(() => {
@@ -128,23 +146,27 @@ export function EmotionGrid({
     [centerOffsetFor, x, y],
   );
 
+  // Bij elke beweging: de "grootste"/dichtstbijzijnde cel is meteen de
+  // selectie (geen wachttijd) — dat bepaalt alleen het label/kleur van de
+  // verder-knop, niet de positie van het rooster zelf.
+  const trackNearestRealtime = useCallback(() => {
+    const cell = nearestCell();
+    if (cell) setSelected((prev) => (prev === cell.name ? prev : cell.name));
+  }, [nearestCell]);
+
+  // De exacte snap-naar-midden mag alleen na loslaten (of na uitdovende
+  // momentum) gebeuren — nooit terwijl er nog actief gesleept wordt, anders
+  // vecht de snap-animatie met de sleepbeweging zelf (voelde aan als
+  // "teruggetrokken worden" tijdens het pannen).
   const scheduleSettle = useCallback(() => {
+    trackNearestRealtime();
     clearSettleTimer();
+    if (isDragging.current) return;
     settleTimer.current = setTimeout(() => {
-      const targetContentX = size.w / 2 - x.get();
-      const targetContentY = size.h / 2 - y.get();
-      const col = Math.min(
-        3,
-        Math.max(0, Math.round((targetContentX - metrics.cellW / 2) / metrics.pitchX)),
-      );
-      const row = Math.min(
-        3,
-        Math.max(0, Math.round((targetContentY - metrics.cellH / 2) / metrics.pitchY)),
-      );
-      const cell = CELLS.find((c) => c.col === col && c.row === row);
+      const cell = nearestCell();
       if (cell) lockCell(cell);
     }, SETTLE_MS);
-  }, [clearSettleTimer, lockCell, metrics, size, x, y]);
+  }, [clearSettleTimer, lockCell, nearestCell, trackNearestRealtime]);
 
   // Direct tikken op een vakje vergrendelt 'm meteen, zonder op de
   // settle-debounce te wachten. Dit zit op de drag-hit-catcher zelf (niet op
@@ -248,7 +270,13 @@ export function EmotionGrid({
         dragMomentum
         dragTransition={{ power: 0.25, timeConstant: 240, restDelta: 0.5 }}
         dragConstraints={dragConstraints}
-        onDragStart={clearSettleTimer}
+        onDragStart={() => {
+          isDragging.current = true;
+          clearSettleTimer();
+        }}
+        onDragEnd={() => {
+          isDragging.current = false;
+        }}
         onTap={handleGridTap}
       >
         {CELLS.map((cell) => (
