@@ -4,7 +4,6 @@ import { useMemo, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
 import type { Checkin, FactorKey, Quadrant } from "@/lib/supabase/types";
 import {
-  EMOTIONS,
   FACTORS,
   PRINCIPES,
   QUADRANTS,
@@ -13,6 +12,7 @@ import {
   quadrantBg,
   quadrantColor,
   quadrantDef,
+  quadrantForEmotion,
   quadrantLine,
 } from "@/lib/emotions";
 import {
@@ -21,6 +21,7 @@ import {
   type FactorValues,
 } from "@/lib/checkins";
 import { FactorSlider } from "./factor-slider";
+import { EmotionGrid } from "./emotion-grid";
 import { HabitsToday } from "@/components/habits/habits-today";
 import { HabitInsight } from "@/components/habits/habit-insight";
 import { pickInsight } from "@/lib/habits";
@@ -36,6 +37,14 @@ interface Flow {
   factors: FactorValues;
   note: string;
   savedId: string | null;
+  // Positie/afmeting van de getikte kwadrant-knop — startpunt van de
+  // zoom-in-animatie naar het emotie-rooster (laag 2).
+  originRect: { left: number; top: number; width: number; height: number };
+  // Rect van de app-frame (<main>) op het moment van tikken — het emotie-
+  // rooster vult exact dit frame, maar dat is op desktop smaller dan het
+  // browservenster (mx-auto max-w-md), dus window.innerWidth/Height is hier
+  // de verkeerde referentie.
+  frameRect: { left: number; top: number; width: number; height: number };
 }
 
 const emptyFactors = (): FactorValues => ({
@@ -92,7 +101,11 @@ export function EmotionLogger({
         : `${todayCount} logs vandaag`;
 
   // ---- flow-navigatie ----
-  function startFlow(quadrant: Quadrant) {
+  function startFlow(
+    quadrant: Quadrant,
+    originRect: Flow["originRect"],
+    frameRect: Flow["frameRect"],
+  ) {
     setFlow({
       step: "pick",
       quadrant,
@@ -101,10 +114,19 @@ export function EmotionLogger({
       factors: emptyFactors(),
       note: "",
       savedId: null,
+      originRect,
+      frameRect,
     });
   }
+  // Op het doorlopende rooster kan de gebruiker een emotie uit een ander
+  // kwadrant dan het getikte selecteren — flow.quadrant moet dan meeveranderen
+  // (kleur/label in de rest van de flow, en het kwadrant dat wordt opgeslagen).
   function pickEmotion(name: string) {
-    setFlow((f) => (f ? { ...f, emotion: name, step: "factors" } : f));
+    setFlow((f) =>
+      f
+        ? { ...f, emotion: name, quadrant: quadrantForEmotion(name) ?? f.quadrant, step: "factors" }
+        : f,
+    );
   }
   function back() {
     setFlow((f) => {
@@ -189,7 +211,21 @@ export function EmotionLogger({
           {QUADRANTS.map((q) => (
             <button
               key={q.key}
-              onClick={() => startFlow(q.key)}
+              onClick={(e) => {
+                const r = e.currentTarget.getBoundingClientRect();
+                const frame =
+                  e.currentTarget.closest("main")?.getBoundingClientRect() ?? r;
+                startFlow(
+                  q.key,
+                  { left: r.left, top: r.top, width: r.width, height: r.height },
+                  {
+                    left: frame.left,
+                    top: frame.top,
+                    width: frame.width,
+                    height: frame.height,
+                  },
+                );
+              }}
               className="flex size-full flex-col items-center justify-center gap-1.5 rounded-full px-[18px] transition active:scale-[0.96]"
               style={{
                 background: quadrantBg(q.hue, 0.09),
@@ -209,35 +245,14 @@ export function EmotionLogger({
 
       {/* ---------- Flow-overlays ---------- */}
       {flow && flow.step === "pick" && (
-        <Overlay onBack={back}>
-          <OverlayHead
-            color={colorForKey(flow.quadrant)}
-            title={quadrantDef(flow.quadrant).label}
-            sub="waar zit je nu?"
-          />
-          <div
-            className="mt-[34px] grid gap-4"
-            style={{
-              gridTemplateColumns: "min(160px, 42vw) min(160px, 42vw)",
-              gridTemplateRows: "min(120px, 34vw) min(120px, 34vw)",
-            }}
-          >
-            {EMOTIONS[flow.quadrant].map((name) => (
-              <button
-                key={name}
-                onClick={() => pickEmotion(name)}
-                className="flex size-full items-center justify-center rounded-[22px] p-3 text-center text-[15px] font-medium leading-[1.25] transition active:scale-[0.97]"
-                style={{
-                  background: quadrantBg(quadrantDef(flow.quadrant).hue, 0.09),
-                  border: `1px solid ${quadrantLine(quadrantDef(flow.quadrant).hue)}`,
-                  color: colorForKey(flow.quadrant),
-                }}
-              >
-                {name}
-              </button>
-            ))}
-          </div>
-        </Overlay>
+        <EmotionGrid
+          initialQuadrant={flow.quadrant}
+          initialEmotion={flow.emotion}
+          originRect={flow.originRect}
+          frameRect={flow.frameRect}
+          onBack={back}
+          onSelect={pickEmotion}
+        />
       )}
 
       {flow && flow.step === "factors" && (

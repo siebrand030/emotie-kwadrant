@@ -30,6 +30,13 @@ export function quadrantDef(key: Quadrant): QuadrantDef {
   return BY_KEY[key];
 }
 
+/** Welk kwadrant een emotienaam (laag 2) bij hoort — nodig omdat je op het
+ * doorlopende rooster een emotie uit een ander kwadrant dan het getikte kunt
+ * selecteren. */
+export function quadrantForEmotion(name: string): Quadrant | undefined {
+  return QUADRANTS.find((q) => EMOTIONS[q.key].includes(name))?.key;
+}
+
 // Laag 2: specifieke emoties per kwadrant. Elk kwadrant is zelf óók een
 // mini-kwadrant: [linksboven, rechtsboven, linksonder, rechtsonder].
 export const EMOTIONS: Record<Quadrant, string[]> = {
@@ -38,6 +45,50 @@ export const EMOTIONS: Record<Quadrant, string[]> = {
   opladen: ["Volwaardig", "Actieve zelfwaardering", "Actieve ontspanning", "Opladen"],
   wegzakken: ["Zelfafwijzing", "Zelf struggle", "Verdoven", "Fantaseren"],
 };
+
+export interface EmotionCellPos {
+  quadrant: Quadrant;
+  name: string;
+  col: number; // 0..3, kolom in het doorlopende 4x4-rooster (laag 2)
+  row: number; // 0..3, rij in het doorlopende 4x4-rooster (laag 2)
+}
+
+// Kwadrant-positie in het 2x2-rooster van laag 1 (zie QUADRANTS hierboven:
+// rooster links→rechts, boven→onder).
+const QUADRANT_POS: Record<Quadrant, { col: number; row: number }> = {
+  forceren: { col: 0, row: 0 },
+  bouwen: { col: 1, row: 0 },
+  wegzakken: { col: 0, row: 1 },
+  opladen: { col: 1, row: 1 },
+};
+
+// Sub-positie binnen een kwadrant z'n eigen mini-kwadrant, zelfde volgorde als
+// EMOTIONS[quadrant]: [linksboven, rechtsboven, linksonder, rechtsonder].
+const SUB_POS: { col: number; row: number }[] = [
+  { col: 0, row: 0 },
+  { col: 1, row: 0 },
+  { col: 0, row: 1 },
+  { col: 1, row: 1 },
+];
+
+/**
+ * Laag 2 als één doorlopend 4x4-rooster: elk kwadrant vult zijn eigen kwadrant
+ * van het rooster met zijn 4 emoties, in dezelfde volgorde als EMOTIONS.
+ */
+export function emotionGridPositions(): EmotionCellPos[] {
+  return QUADRANTS.flatMap((q) => {
+    const qp = QUADRANT_POS[q.key];
+    return EMOTIONS[q.key].map((name, i) => {
+      const sp = SUB_POS[i];
+      return {
+        quadrant: q.key,
+        name,
+        col: qp.col * 2 + sp.col,
+        row: qp.row * 2 + sp.row,
+      };
+    });
+  });
+}
 
 // Laag 3: factoren die de staat kunnen beïnvloeden. Schaal 1–5; null = niet ingesteld.
 export const FACTORS: { key: FactorKey; label: string }[] = [
