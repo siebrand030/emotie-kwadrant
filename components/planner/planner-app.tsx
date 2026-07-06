@@ -1,247 +1,126 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import Link from "next/link";
 import { createClient } from "@/lib/supabase/client";
-import { TASK_COLORS, type Task, type TaskColor } from "@/lib/supabase/types";
+import {
+  TASK_COLORS,
+  type DailyPlan,
+  type InboxItem,
+  type PlanItem,
+} from "@/lib/supabase/types";
 import { taskColor, taskColorMix } from "@/lib/task-colors";
 import {
-  addMin,
-  defaultStart,
-  isoDate,
+  clampMinutesOfDay,
   minToTime,
   normalizeTime,
+  snap,
   toMin,
 } from "@/lib/planner-time";
 import { BottomNav } from "@/components/nav/bottom-nav";
 import { TaskSheet, type SheetState } from "./task-sheet";
+import { BraindumpList } from "./braindump-list";
+import { InboxStrip } from "./inbox-strip";
 import {
-  createInboxTask,
-  createScheduledTask,
-  deleteTask,
-  scheduleTask,
-  setTaskCompleted,
-  type ScheduledTaskInput,
-} from "@/lib/tasks";
+  createBraindumpItem,
+  deletePlanItem,
+  scheduleItem,
+  setPlanItemCompleted,
+  updatePlanItemDetails,
+  updateScheduledItem,
+} from "@/lib/plan-items";
+import { createInboxItem, deleteInboxItem } from "@/lib/inbox";
 
-type PlanTab = "tijdlijn" | "inbox" | "instellingen";
-
-// 1px per minuut (zoals het prototype); 24u = 1440px hoge scroll-grid.
+// 1px per minuut; 24u = 1440px hoge scroll-grid.
 const MINUTE_PX = 1;
 const GRID_HEIGHT = 1440;
-const DAY_LETTERS = ["z", "m", "d", "w", "d", "v", "z"];
+const DEFAULT_DURATION = 30;
+const TAP_THRESHOLD_MIN = 6; // kleiner verschil dan dit tijdens een block-drag = tik (opent sheet)
 
 interface PlannerAppProps {
   userId: string;
-  initialTasks: Task[];
+  dailyPlan: DailyPlan;
+  initialPlanItems: PlanItem[];
+  initialInboxItems: InboxItem[];
 }
 
-export function PlannerApp({ userId, initialTasks }: PlannerAppProps) {
+/** Drag-state voor de drie sleep-interacties: braindump→tijdlijn, verplaatsen, herduren. */
+type DragState =
+  | {
+      kind: "braindump";
+      itemId: string;
+      pointerId: number;
+      title: string;
+      color: PlanItem["color"];
+      x: number;
+      y: number;
+      overGrid: boolean;
+      previewMin: number | null;
+    }
+  | {
+      kind: "move";
+      itemId: string;
+      pointerId: number;
+      startY: number;
+      baseStartMin: number;
+      deltaMin: number;
+    }
+  | {
+      kind: "resize";
+      itemId: string;
+      pointerId: number;
+      startY: number;
+      baseDuration: number;
+      deltaMin: number;
+    };
+
+export function PlannerApp({
+  userId,
+  dailyPlan,
+  initialPlanItems,
+  initialInboxItems,
+}: PlannerAppProps) {
   const supabase = useMemo(() => createClient(), []);
-  const todayIso = useMemo(() => isoDate(new Date()), []);
 
-  const [tasks, setTasks] = useState<Task[]>(initialTasks);
-  const [selDate, setSelDate] = useState<string>(todayIso);
-  const [planTab, setPlanTab] = useState<PlanTab>("tijdlijn");
+  const [items, setItems] = useState<PlanItem[]>(initialPlanItems);
+  const [inboxItems, setInboxItems] = useState<InboxItem[]>(initialInboxItems);
+  const [braindumpText, setBraindumpText] = useState("");
+  const [inboxValue, setInboxValue] = useState("");
+  const [inboxExpanded, setInboxExpanded] = useState(false);
   const [sheet, setSheet] = useState<SheetState | null>(null);
-  const [newThought, setNewThought] = useState("");
+  const [drag, setDrag] = useState<DragState | null>(null);
 
+  const gridRef = useRef<HTMLDivElement | null>(null);
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const didScrollRef = useRef(false);
 
-  // ---- afgeleide data ----
-  const scheduled = tasks.filter((t) => t.status === "scheduled");
-  const inbox = tasks.filter((t) => t.status === "inbox");
+  const unscheduled = items
+    .filter((i) => i.status === "unscheduled")
+    .sort((a, b) => a.sort_order - b.sort_order);
+  const scheduled = items
+    .filter((i) => i.status === "scheduled")
+    .sort((a, b) =>
+      (a.planned_start_time ?? "") < (b.planned_start_time ?? "") ? -1 : 1,
+    );
 
-  const tasksForDate = (iso: string) =>
-    scheduled
-      .filter((t) => t.date === iso)
-      .sort((a, b) => (a.start_time ?? "") < (b.start_time ?? "") ? -1 : 1);
-
-  const dayTasks = tasksForDate(selDate);
-
-  const sel = new Date(selDate + "T00:00:00");
-  const weekStart = new Date(sel);
-  weekStart.setDate(sel.getDate() - sel.getDay());
-  const weekDays = Array.from({ length: 7 }, (_, i) => {
-    const d = new Date(weekStart);
-    d.setDate(weekStart.getDate() + i);
-    const iso = isoDate(d);
-    return {
-      iso,
-      letter: DAY_LETTERS[i],
-      num: d.getDate(),
-      isSelected: iso === selDate,
-      isToday: iso === todayIso,
-      dots: tasksForDate(iso).slice(0, 4),
-    };
-  });
-  const monthLabel = sel.toLocaleDateString("nl-NL", {
-    month: "long",
-    year: "numeric",
-  });
+  const dayLabel = new Date(dailyPlan.date + "T00:00:00").toLocaleDateString(
+    "nl-NL",
+    { weekday: "long", day: "numeric", month: "long" },
+  );
 
   const now = new Date();
   const nowMin = now.getHours() * 60 + now.getMinutes();
-  const showNow = selDate === todayIso;
+  const showNow = dailyPlan.date === new Date().toISOString().slice(0, 10);
 
-  // Bij openen van de tijdlijn eenmalig naar "nu" scrollen.
+  // Bij openen eenmalig naar "nu" scrollen.
   useEffect(() => {
-    if (planTab !== "tijdlijn" || didScrollRef.current) return;
+    if (didScrollRef.current) return;
     const el = scrollRef.current;
     if (el) {
       didScrollRef.current = true;
       el.scrollTop = Math.max(0, nowMin * MINUTE_PX - 160);
     }
-  }, [planTab, nowMin]);
-
-  // ---- sheet openen ----
-  function openCreate(pref?: {
-    time?: string;
-    title?: string;
-    color?: TaskColor;
-    taskId?: string;
-  }) {
-    setSheet({
-      mode: "create",
-      taskId: pref?.taskId ?? null,
-      title: pref?.title ?? "",
-      date: selDate,
-      start: pref?.time ?? defaultStart(),
-      dur: 30,
-      color: pref?.color ?? "coral",
-      note: "",
-    });
-  }
-
-  function openEdit(task: Task) {
-    setSheet({
-      mode: "edit",
-      taskId: task.id,
-      title: task.title,
-      date: task.date ?? todayIso,
-      start: normalizeTime(task.start_time) ?? defaultStart(),
-      dur: task.duration_minutes ?? 30,
-      color: task.color,
-      note: task.notes ?? "",
-    });
-  }
-
-  const patchSheet = (patch: Partial<SheetState>) =>
-    setSheet((s) => (s ? { ...s, ...patch } : s));
-
-  // ---- mutaties (optimistisch; revert bij fout) ----
-  async function saveSheet() {
-    if (!sheet || !sheet.title.trim()) return;
-    const s = sheet;
-    const input: ScheduledTaskInput = {
-      title: s.title.trim(),
-      date: s.date,
-      start_time: s.start,
-      duration_minutes: s.dur,
-      color: s.color,
-      notes: s.note.trim() || null,
-    };
-
-    setSheet(null);
-    setPlanTab("tijdlijn");
-    setSelDate(s.date);
-
-    if (s.taskId) {
-      // Bestaande rij: bewerken, of een inbox-item inplannen (status → scheduled).
-      const prev = tasks;
-      setTasks((ts) =>
-        ts.map((t) =>
-          t.id === s.taskId ? { ...t, ...input, status: "scheduled" } : t,
-        ),
-      );
-      try {
-        await scheduleTask(supabase, s.taskId, input);
-      } catch (e) {
-        console.error("Inplannen mislukt:", e);
-        setTasks(prev);
-      }
-    } else {
-      // Nieuwe ingeplande taak.
-      const tempId = "temp-" + Date.now();
-      const optimistic: Task = {
-        id: tempId,
-        user_id: userId,
-        status: "scheduled",
-        completed: false,
-        created_at: new Date().toISOString(),
-        updated_at: new Date().toISOString(),
-        ...input,
-      };
-      setTasks((ts) => [...ts, optimistic]);
-      try {
-        const row = await createScheduledTask(supabase, userId, input);
-        setTasks((ts) => ts.map((t) => (t.id === tempId ? row : t)));
-      } catch (e) {
-        console.error("Taak aanmaken mislukt:", e);
-        setTasks((ts) => ts.filter((t) => t.id !== tempId));
-      }
-    }
-  }
-
-  async function deleteFromSheet() {
-    if (!sheet?.taskId) return;
-    const id = sheet.taskId;
-    setSheet(null);
-    const prev = tasks;
-    setTasks((ts) => ts.filter((t) => t.id !== id));
-    try {
-      await deleteTask(supabase, id);
-    } catch (e) {
-      console.error("Verwijderen mislukt:", e);
-      setTasks(prev);
-    }
-  }
-
-  async function toggleComplete(task: Task) {
-    const next = !task.completed;
-    const prev = tasks;
-    setTasks((ts) =>
-      ts.map((t) => (t.id === task.id ? { ...t, completed: next } : t)),
-    );
-    try {
-      await setTaskCompleted(supabase, task.id, next);
-    } catch (e) {
-      console.error("Afvinken mislukt:", e);
-      setTasks(prev);
-    }
-  }
-
-  async function addThought() {
-    const title = newThought.trim();
-    if (!title) return;
-    const color = TASK_COLORS[inbox.length % TASK_COLORS.length];
-    setNewThought("");
-    const tempId = "temp-" + Date.now();
-    const optimistic: Task = {
-      id: tempId,
-      user_id: userId,
-      title,
-      notes: null,
-      status: "inbox",
-      date: null,
-      start_time: null,
-      duration_minutes: null,
-      color,
-      completed: false,
-      created_at: new Date().toISOString(),
-      updated_at: new Date().toISOString(),
-    };
-    setTasks((ts) => [...ts, optimistic]);
-    try {
-      const row = await createInboxTask(supabase, userId, title, color);
-      setTasks((ts) => ts.map((t) => (t.id === tempId ? row : t)));
-    } catch (e) {
-      console.error("Toevoegen mislukt:", e);
-      setTasks((ts) => ts.filter((t) => t.id !== tempId));
-      setNewThought(title);
-    }
-  }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const hourMarks = Array.from({ length: 24 }, (_, h) => ({
     hour: h,
@@ -249,375 +128,539 @@ export function PlannerApp({ userId, initialTasks }: PlannerAppProps) {
     label: String(h).padStart(2, "0") + ":00",
   }));
 
+  // ---- braindump: aanmaken ----
+  async function addBraindumpLine() {
+    const title = braindumpText.trim();
+    if (!title) return;
+    setBraindumpText("");
+    const color = TASK_COLORS[unscheduled.length % TASK_COLORS.length];
+    const sortOrder = unscheduled.length;
+    const tempId = "temp-" + Date.now();
+    const optimistic: PlanItem = {
+      id: tempId,
+      daily_plan_id: dailyPlan.id,
+      user_id: userId,
+      title,
+      notes: null,
+      status: "unscheduled",
+      planned_start_time: null,
+      planned_duration_minutes: null,
+      sort_order: sortOrder,
+      color,
+      completed: false,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    };
+    setItems((cur) => [...cur, optimistic]);
+    try {
+      const row = await createBraindumpItem(
+        supabase,
+        userId,
+        dailyPlan.id,
+        title,
+        color,
+        sortOrder,
+      );
+      setItems((cur) => cur.map((i) => (i.id === tempId ? row : i)));
+    } catch (e) {
+      console.error("Braindump-item toevoegen mislukt:", e);
+      setItems((cur) => cur.filter((i) => i.id !== tempId));
+      setBraindumpText(title);
+    }
+  }
+
+  // ---- drag: braindump-item naar tijdlijn slepen ----
+  function onBraindumpPointerDown(e: React.PointerEvent, item: PlanItem) {
+    e.currentTarget.setPointerCapture(e.pointerId);
+    setDrag({
+      kind: "braindump",
+      itemId: item.id,
+      pointerId: e.pointerId,
+      title: item.title,
+      color: item.color,
+      x: e.clientX,
+      y: e.clientY,
+      overGrid: false,
+      previewMin: null,
+    });
+  }
+
+  function onBraindumpPointerMove(e: React.PointerEvent, item: PlanItem) {
+    setDrag((d) => {
+      if (!d || d.kind !== "braindump" || d.itemId !== item.id || d.pointerId !== e.pointerId)
+        return d;
+      const rect = gridRef.current?.getBoundingClientRect();
+      let overGrid = false;
+      let previewMin: number | null = null;
+      if (
+        rect &&
+        e.clientY >= rect.top &&
+        e.clientY <= rect.bottom &&
+        e.clientX >= rect.left &&
+        e.clientX <= rect.right
+      ) {
+        overGrid = true;
+        previewMin = clampMinutesOfDay(snap(e.clientY - rect.top));
+      }
+      return { ...d, x: e.clientX, y: e.clientY, overGrid, previewMin };
+    });
+  }
+
+  function onBraindumpPointerUp(e: React.PointerEvent, item: PlanItem) {
+    setDrag((d) => {
+      if (!d || d.kind !== "braindump" || d.itemId !== item.id || d.pointerId !== e.pointerId)
+        return null;
+      if (d.overGrid && d.previewMin != null) {
+        void handleScheduleDrop(item, d.previewMin);
+      }
+      return null;
+    });
+  }
+
+  async function handleScheduleDrop(item: PlanItem, startMin: number) {
+    const start = minToTime(startMin);
+    const prev = item;
+    setItems((cur) =>
+      cur.map((i) =>
+        i.id === item.id
+          ? {
+              ...i,
+              status: "scheduled",
+              planned_start_time: start,
+              planned_duration_minutes: DEFAULT_DURATION,
+            }
+          : i,
+      ),
+    );
+    try {
+      await scheduleItem(supabase, item.id, {
+        planned_start_time: start,
+        planned_duration_minutes: DEFAULT_DURATION,
+      });
+    } catch (e) {
+      console.error("Inplannen mislukt:", e);
+      setItems((cur) => cur.map((i) => (i.id === item.id ? prev : i)));
+    }
+  }
+
+  // ---- drag: ingepland blok verplaatsen ----
+  function onBlockPointerDown(e: React.PointerEvent, item: PlanItem) {
+    e.stopPropagation();
+    e.currentTarget.setPointerCapture(e.pointerId);
+    const baseStartMin = toMin(normalizeTime(item.planned_start_time) ?? "00:00");
+    setDrag({
+      kind: "move",
+      itemId: item.id,
+      pointerId: e.pointerId,
+      startY: e.clientY,
+      baseStartMin,
+      deltaMin: 0,
+    });
+  }
+
+  function onBlockPointerMove(e: React.PointerEvent, item: PlanItem) {
+    setDrag((d) => {
+      if (!d || d.kind !== "move" || d.itemId !== item.id || d.pointerId !== e.pointerId)
+        return d;
+      return { ...d, deltaMin: (e.clientY - d.startY) / MINUTE_PX };
+    });
+  }
+
+  function onBlockPointerUp(e: React.PointerEvent, item: PlanItem) {
+    setDrag((d) => {
+      if (!d || d.kind !== "move" || d.itemId !== item.id || d.pointerId !== e.pointerId)
+        return null;
+      if (Math.abs(d.deltaMin) < TAP_THRESHOLD_MIN) {
+        openEdit(item);
+      } else {
+        const newStartMin = clampMinutesOfDay(snap(d.baseStartMin + d.deltaMin));
+        void handleMove(item, newStartMin);
+      }
+      return null;
+    });
+  }
+
+  async function handleMove(item: PlanItem, newStartMin: number) {
+    const start = minToTime(newStartMin);
+    const prevStart = item.planned_start_time;
+    setItems((cur) =>
+      cur.map((i) => (i.id === item.id ? { ...i, planned_start_time: start } : i)),
+    );
+    try {
+      await updateScheduledItem(supabase, item.id, { planned_start_time: start });
+    } catch (e) {
+      console.error("Verplaatsen mislukt:", e);
+      setItems((cur) =>
+        cur.map((i) => (i.id === item.id ? { ...i, planned_start_time: prevStart } : i)),
+      );
+    }
+  }
+
+  // ---- drag: blok herduren (onderkant slepen) ----
+  function onResizePointerDown(e: React.PointerEvent, item: PlanItem) {
+    e.stopPropagation();
+    e.currentTarget.setPointerCapture(e.pointerId);
+    setDrag({
+      kind: "resize",
+      itemId: item.id,
+      pointerId: e.pointerId,
+      startY: e.clientY,
+      baseDuration: item.planned_duration_minutes ?? DEFAULT_DURATION,
+      deltaMin: 0,
+    });
+  }
+
+  function onResizePointerMove(e: React.PointerEvent, item: PlanItem) {
+    setDrag((d) => {
+      if (!d || d.kind !== "resize" || d.itemId !== item.id || d.pointerId !== e.pointerId)
+        return d;
+      return { ...d, deltaMin: (e.clientY - d.startY) / MINUTE_PX };
+    });
+  }
+
+  function onResizePointerUp(e: React.PointerEvent, item: PlanItem) {
+    setDrag((d) => {
+      if (!d || d.kind !== "resize" || d.itemId !== item.id || d.pointerId !== e.pointerId)
+        return null;
+      const newDuration = Math.max(15, snap(d.baseDuration + d.deltaMin));
+      void handleResize(item, newDuration);
+      return null;
+    });
+  }
+
+  async function handleResize(item: PlanItem, newDuration: number) {
+    const prevDuration = item.planned_duration_minutes;
+    setItems((cur) =>
+      cur.map((i) =>
+        i.id === item.id ? { ...i, planned_duration_minutes: newDuration } : i,
+      ),
+    );
+    try {
+      await updateScheduledItem(supabase, item.id, {
+        planned_duration_minutes: newDuration,
+      });
+    } catch (e) {
+      console.error("Herduren mislukt:", e);
+      setItems((cur) =>
+        cur.map((i) =>
+          i.id === item.id ? { ...i, planned_duration_minutes: prevDuration } : i,
+        ),
+      );
+    }
+  }
+
+  function blockGeometry(item: PlanItem) {
+    const baseStart = toMin(normalizeTime(item.planned_start_time) ?? "00:00");
+    const baseDur = item.planned_duration_minutes ?? DEFAULT_DURATION;
+    let top = baseStart;
+    let dur = baseDur;
+    if (drag && drag.itemId === item.id) {
+      if (drag.kind === "move") top = clampMinutesOfDay(snap(drag.baseStartMin + drag.deltaMin));
+      if (drag.kind === "resize") dur = Math.max(15, snap(drag.baseDuration + drag.deltaMin));
+    }
+    return { top, dur };
+  }
+
+  // ---- sheet (bewerken van een al ingepland item) ----
+  function openEdit(item: PlanItem) {
+    setSheet({
+      itemId: item.id,
+      title: item.title,
+      start: normalizeTime(item.planned_start_time) ?? "09:00",
+      dur: item.planned_duration_minutes ?? DEFAULT_DURATION,
+      note: item.notes ?? "",
+      color: item.color,
+    });
+  }
+
+  const patchSheet = (patch: Partial<SheetState>) =>
+    setSheet((s) => (s ? { ...s, ...patch } : s));
+
+  async function saveSheet() {
+    if (!sheet || !sheet.title.trim()) return;
+    const s = sheet;
+    const prev = items.find((i) => i.id === s.itemId) ?? null;
+    setSheet(null);
+    setItems((cur) =>
+      cur.map((i) =>
+        i.id === s.itemId
+          ? {
+              ...i,
+              title: s.title.trim(),
+              notes: s.note.trim() || null,
+              planned_start_time: s.start,
+              planned_duration_minutes: s.dur,
+            }
+          : i,
+      ),
+    );
+    try {
+      await Promise.all([
+        updateScheduledItem(supabase, s.itemId, {
+          planned_start_time: s.start,
+          planned_duration_minutes: s.dur,
+        }),
+        updatePlanItemDetails(supabase, s.itemId, {
+          title: s.title.trim(),
+          notes: s.note.trim() || null,
+        }),
+      ]);
+    } catch (e) {
+      console.error("Bijwerken mislukt:", e);
+      if (prev) setItems((cur) => cur.map((i) => (i.id === s.itemId ? prev : i)));
+    }
+  }
+
+  async function deleteFromSheet() {
+    if (!sheet) return;
+    const id = sheet.itemId;
+    setSheet(null);
+    const prev = items;
+    setItems((cur) => cur.filter((i) => i.id !== id));
+    try {
+      await deletePlanItem(supabase, id);
+    } catch (e) {
+      console.error("Verwijderen mislukt:", e);
+      setItems(prev);
+    }
+  }
+
+  async function toggleComplete(item: PlanItem) {
+    const next = !item.completed;
+    const prev = items;
+    setItems((cur) => cur.map((i) => (i.id === item.id ? { ...i, completed: next } : i)));
+    try {
+      await setPlanItemCompleted(supabase, item.id, next);
+    } catch (e) {
+      console.error("Afvinken mislukt:", e);
+      setItems(prev);
+    }
+  }
+
+  // ---- inbox-strook (los van de dagplanning) ----
+  async function addInboxItem() {
+    const content = inboxValue.trim();
+    if (!content) return;
+    setInboxValue("");
+    const tempId = "temp-" + Date.now();
+    const optimistic: InboxItem = {
+      id: tempId,
+      user_id: userId,
+      content,
+      created_at: new Date().toISOString(),
+    };
+    setInboxItems((cur) => [optimistic, ...cur]);
+    try {
+      const row = await createInboxItem(supabase, userId, content);
+      setInboxItems((cur) => cur.map((i) => (i.id === tempId ? row : i)));
+    } catch (e) {
+      console.error("Inbox-item toevoegen mislukt:", e);
+      setInboxItems((cur) => cur.filter((i) => i.id !== tempId));
+      setInboxValue(content);
+    }
+  }
+
+  async function removeInboxItem(id: string) {
+    const prev = inboxItems;
+    setInboxItems((cur) => cur.filter((i) => i.id !== id));
+    try {
+      await deleteInboxItem(supabase, id);
+    } catch (e) {
+      console.error("Inbox-item verwijderen mislukt:", e);
+      setInboxItems(prev);
+    }
+  }
+
+  const draggingBraindumpId = drag?.kind === "braindump" ? drag.itemId : null;
+
   return (
     <main className="font-plex relative mx-auto flex h-dvh max-w-md flex-col overflow-hidden bg-[#0B0C0D] text-[#E9EBEA]">
-      {/* Kop: terug naar Tools */}
-      <div className="flex flex-none items-center gap-2 px-5 pt-5 pb-0.5">
-        <Link
-          href="/tools"
-          className="font-plex-mono px-2.5 py-1 text-xl text-[#6C7377]"
-          aria-label="Terug naar Tools"
-        >
-          ‹
-        </Link>
-        <span className="text-[15px] font-medium text-[#D7DADA]">Planner</span>
+      {/* Kop: alleen de datum, geen instellingen/inbox meer bovenaan */}
+      <div className="flex flex-none items-baseline justify-between px-5 pt-5 pb-1">
+        <span className="text-[15px] font-medium text-[#D7DADA] capitalize">
+          {dayLabel}
+        </span>
+        {unscheduled.length > 0 && (
+          <span className="font-plex-mono text-[11px] text-[#565C60]">
+            {unscheduled.length} te plannen
+          </span>
+        )}
       </div>
 
-      {/* Inbox-knop */}
-      <div className="flex-none px-5 pt-3.5 pb-0.5">
-        <button
-          type="button"
-          onClick={() => setPlanTab("inbox")}
-          className="flex w-full items-center gap-3 rounded-[14px] border px-4 py-3.5 text-left transition active:scale-[0.98]"
-          style={{
-            background:
-              planTab === "inbox" ? taskColorMix("coral", 13) : "#15171A",
-            borderColor:
-              planTab === "inbox"
-                ? taskColorMix("coral", 32)
-                : "rgba(255,255,255,.08)",
+      {/* Braindump: direct typen, Enter = nieuw item */}
+      <div className="flex-none px-5 pb-2">
+        <input
+          value={braindumpText}
+          onChange={(e) => setBraindumpText(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") {
+              e.preventDefault();
+              void addBraindumpLine();
+            }
           }}
-        >
-          <span
-            className="size-2 flex-none rounded-full"
-            style={{ background: taskColor("coral") }}
-          />
-          <span className="flex-1 text-sm font-medium text-[#E9EBEA]">Inbox</span>
-          {inbox.length > 0 && (
-            <span
-              className="font-plex-mono text-[11px]"
-              style={{ color: taskColor("coral") }}
-            >
-              {inbox.length}
-            </span>
-          )}
-          <span className="text-base text-[#565C60]">›</span>
-        </button>
+          placeholder="Typ je lijstje, Enter voor elk item..."
+          autoFocus
+          className="w-full rounded-xl border border-white/10 bg-[#15171A] px-3.5 py-3 text-[13.5px] text-[#E9EBEA] outline-none placeholder:text-[#565C60] focus:border-white/25"
+        />
+        <BraindumpList
+          items={unscheduled}
+          draggingItemId={draggingBraindumpId}
+          onPointerDown={onBraindumpPointerDown}
+          onPointerMove={onBraindumpPointerMove}
+          onPointerUp={onBraindumpPointerUp}
+        />
       </div>
 
-      {/* Sub-tabs */}
-      <div className="flex flex-none justify-center gap-6 pt-3.5 pb-1.5">
-        <button
-          type="button"
-          onClick={() => setPlanTab("tijdlijn")}
-          className="font-plex-mono px-0.5 py-2 text-[11.5px]"
-          style={{ color: planTab === "tijdlijn" ? "#E9EBEA" : "#6C7377" }}
-        >
-          tijdlijn
-        </button>
-        <button
-          type="button"
-          onClick={() => setPlanTab("instellingen")}
-          className="font-plex-mono px-0.5 py-2 text-[11.5px]"
-          style={{ color: planTab === "instellingen" ? "#E9EBEA" : "#6C7377" }}
-        >
-          instellingen
-        </button>
-      </div>
-
-      {/* --- Tijdlijn --- */}
-      {planTab === "tijdlijn" && (
-        <>
-          <div className="flex flex-none items-center justify-between px-5 pt-1.5 pb-0.5">
-            <button
-              type="button"
-              onClick={() => shiftWeek(-7)}
-              className="font-plex-mono px-3.5 py-1.5 text-xl text-[#6C7377]"
-              aria-label="Vorige week"
-            >
-              ‹
-            </button>
-            <span className="font-plex-mono text-xs text-[#9AA0A3]">
-              {monthLabel}
-            </span>
-            <button
-              type="button"
-              onClick={() => shiftWeek(7)}
-              className="font-plex-mono px-3.5 py-1.5 text-xl text-[#6C7377]"
-              aria-label="Volgende week"
-            >
-              ›
-            </button>
-          </div>
-
-          {/* Week-strip */}
-          <div className="flex flex-none gap-1 border-b border-white/5 px-4 pt-1.5 pb-3.5">
-            {weekDays.map((wd) => (
-              <button
-                key={wd.iso}
-                type="button"
-                onClick={() => setSelDate(wd.iso)}
-                className="flex flex-1 flex-col items-center gap-[5px] py-1"
+      {/* Tijdlijn */}
+      <div ref={scrollRef} className="relative flex-1 overflow-y-auto overflow-x-hidden">
+        <div ref={gridRef} className="relative" style={{ height: `${GRID_HEIGHT}px` }}>
+          {hourMarks.map((hm) => (
+            <div key={hm.hour}>
+              <div
+                className="absolute right-[14px] left-[52px] h-px bg-white/5"
+                style={{ top: `${hm.top}px` }}
+              />
+              <div
+                className="font-plex-mono absolute left-[14px] w-[38px] text-right text-[10px] text-[#4A4F52]"
+                style={{ top: `${hm.top - 6}px` }}
               >
-                <span className="font-plex-mono text-[9.5px] uppercase text-[#565C60]">
-                  {wd.letter}
-                </span>
-                <span
-                  className="font-plex-mono flex size-8 items-center justify-center rounded-full text-[13px] font-medium"
-                  style={{
-                    background: wd.isSelected ? taskColor("coral") : "transparent",
-                    color: wd.isSelected
-                      ? "#0B0C0D"
-                      : wd.isToday
-                        ? taskColor("coral")
-                        : "#9AA0A3",
-                  }}
-                >
-                  {wd.num}
-                </span>
-                <span className="flex h-[5px] gap-[3px]">
-                  {wd.dots.map((t) => (
-                    <span
-                      key={t.id}
-                      className="size-1 rounded-full"
-                      style={{ background: taskColor(t.color) }}
-                    />
-                  ))}
-                </span>
-              </button>
-            ))}
-          </div>
-
-          {/* Uur-grid met taakblokken */}
-          <div
-            ref={scrollRef}
-            className="relative flex-1 overflow-y-auto overflow-x-hidden"
-          >
-            {dayTasks.length === 0 && (
-              <div className="absolute inset-x-0 top-[60px] z-[2] px-[22px] text-center text-[13px] text-[#6C7377]">
-                Nog geen taken voor deze dag.
+                {hm.label}
               </div>
-            )}
-            <div
-              onClick={onGridClick}
-              className="relative cursor-pointer"
-              style={{ height: `${GRID_HEIGHT}px` }}
-            >
-              {hourMarks.map((hm) => (
-                <div key={hm.hour}>
-                  <div
-                    className="absolute right-[14px] left-[52px] h-px bg-white/5"
-                    style={{ top: `${hm.top}px` }}
-                  />
-                  <div
-                    className="font-plex-mono absolute left-[14px] w-[38px] text-right text-[10px] text-[#4A4F52]"
-                    style={{ top: `${hm.top - 6}px` }}
-                  >
-                    {hm.label}
-                  </div>
-                </div>
-              ))}
-
-              {showNow && (
-                <>
-                  <div
-                    className="absolute right-[14px] left-[52px] z-[4] h-0.5 rounded-[1px]"
-                    style={{
-                      top: `${nowMin * MINUTE_PX}px`,
-                      background: taskColor("coral"),
-                    }}
-                  />
-                  <div
-                    className="font-plex-mono absolute left-[14px] z-[4] w-[38px] text-right text-[10px] font-semibold"
-                    style={{
-                      top: `${nowMin * MINUTE_PX - 6}px`,
-                      color: taskColor("coral"),
-                    }}
-                  >
-                    {minToTime(nowMin)}
-                  </div>
-                </>
-              )}
-
-              {dayTasks.map((t) => {
-                const start = normalizeTime(t.start_time) ?? "00:00";
-                const dur = t.duration_minutes ?? 30;
-                const top = toMin(start) * MINUTE_PX;
-                const height = Math.max(dur * MINUTE_PX, 44);
-                const done = t.completed;
-                return (
-                  <div
-                    key={t.id}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      openEdit(t);
-                    }}
-                    className="absolute right-[14px] left-[52px] z-[2] flex cursor-pointer flex-col justify-center gap-0.5 rounded-[10px] border border-l-[3px] px-2.5 py-1.5 pr-[34px]"
-                    style={{
-                      top: `${top}px`,
-                      height: `${height}px`,
-                      background: taskColorMix(t.color, 14),
-                      borderColor: taskColorMix(t.color, 32),
-                      borderLeftColor: taskColor(t.color),
-                    }}
-                  >
-                    <span className="font-plex-mono text-[10.5px] text-[#9AA0A3]">
-                      {start} – {addMin(start, dur)}
-                    </span>
-                    <span
-                      className="truncate text-sm font-semibold"
-                      style={{
-                        color: done ? "#565C60" : "#E9EBEA",
-                        textDecoration: done ? "line-through" : "none",
-                      }}
-                    >
-                      {t.title}
-                    </span>
-                    <button
-                      type="button"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        toggleComplete(t);
-                      }}
-                      aria-label={done ? "Afvinken ongedaan maken" : "Afvinken"}
-                      className="absolute top-[7px] right-[7px] flex size-[22px] items-center justify-center rounded-full border-[1.5px] text-[11px] font-semibold text-[#0B0C0D] transition-colors"
-                      style={{
-                        borderColor: taskColor(t.color),
-                        background: done ? taskColor(t.color) : "transparent",
-                      }}
-                    >
-                      {done ? "✓" : ""}
-                    </button>
-                  </div>
-                );
-              })}
             </div>
-          </div>
+          ))}
 
-          {/* FAB */}
-          <button
-            type="button"
-            onClick={() => openCreate()}
-            aria-label="Nieuwe taak"
-            className="absolute right-[22px] bottom-[88px] z-10 flex size-14 items-center justify-center rounded-full text-[28px] font-light text-[#0B0C0D] shadow-[0_6px_20px_rgba(0,0,0,.45)] transition active:scale-95"
-            style={{ background: taskColor("coral") }}
-          >
-            +
-          </button>
-        </>
-      )}
+          {showNow && (
+            <>
+              <div
+                className="absolute right-[14px] left-[52px] z-[4] h-0.5 rounded-[1px]"
+                style={{ top: `${nowMin * MINUTE_PX}px`, background: taskColor("coral") }}
+              />
+              <div
+                className="font-plex-mono absolute left-[14px] z-[4] w-[38px] text-right text-[10px] font-semibold"
+                style={{ top: `${nowMin * MINUTE_PX - 6}px`, color: taskColor("coral") }}
+              >
+                {minToTime(nowMin)}
+              </div>
+            </>
+          )}
 
-      {/* --- Inbox --- */}
-      {planTab === "inbox" && (
-        <div className="flex-1 overflow-y-auto px-[22px] pt-3.5 pb-6">
-          <div className="flex gap-2.5">
-            <input
-              value={newThought}
-              onChange={(e) => setNewThought(e.target.value)}
-              onKeyDown={(e) => e.key === "Enter" && addThought()}
-              placeholder="Nieuwe gedachte..."
-              className="flex-1 rounded-xl border border-white/10 bg-[#0F1112] px-3.5 py-3 text-[13.5px] text-[#E9EBEA] outline-none placeholder:text-[#565C60] focus:border-white/25"
-            />
-            <button
-              type="button"
-              onClick={addThought}
-              aria-label="Toevoegen"
-              className="size-11 flex-none rounded-full border border-white/15 bg-transparent text-[22px] font-light text-[#9AA0A3] transition active:scale-90"
+          {/* Drop-preview tijdens het slepen van een braindump-item */}
+          {drag?.kind === "braindump" && drag.overGrid && drag.previewMin != null && (
+            <div
+              className="absolute right-[14px] left-[52px] z-[5]"
+              style={{ top: `${drag.previewMin}px` }}
             >
-              +
-            </button>
-          </div>
-
-          {inbox.length === 0 ? (
-            <div className="mt-20 flex flex-col items-center gap-4 px-5">
+              <div
+                className="border-t-2 border-dashed"
+                style={{ borderColor: taskColor(drag.color) }}
+              />
               <span
-                className="flex size-[76px] items-center justify-center gap-[5px] rounded-full border"
+                className="font-plex-mono absolute top-1 left-0 text-[10px]"
+                style={{ color: taskColor(drag.color) }}
+              >
+                {minToTime(drag.previewMin)} · {drag.title}
+              </span>
+            </div>
+          )}
+
+          {scheduled.length === 0 && unscheduled.length === 0 && (
+            <div className="absolute inset-x-0 top-[60px] z-[2] px-[22px] text-center text-[13px] text-[#6C7377]">
+              Begin met typen om je dag te plannen.
+            </div>
+          )}
+
+          {scheduled.map((t) => {
+            const { top, dur } = blockGeometry(t);
+            const height = Math.max(dur * MINUTE_PX, 44);
+            const done = t.completed;
+            const isDragging =
+              drag != null && drag.kind !== "braindump" && drag.itemId === t.id;
+            return (
+              <div
+                key={t.id}
+                onPointerDown={(e) => onBlockPointerDown(e, t)}
+                onPointerMove={(e) => onBlockPointerMove(e, t)}
+                onPointerUp={(e) => onBlockPointerUp(e, t)}
+                onPointerCancel={(e) => onBlockPointerUp(e, t)}
+                className="absolute right-[14px] left-[52px] flex cursor-grab flex-col justify-center gap-0.5 rounded-[10px] border border-l-[3px] px-2.5 py-1.5 pr-[34px] active:cursor-grabbing"
                 style={{
-                  background: taskColorMix("coral", 9),
-                  borderColor: taskColorMix("coral", 30),
+                  top: `${top}px`,
+                  height: `${height}px`,
+                  background: taskColorMix(t.color, 14),
+                  borderColor: taskColorMix(t.color, 32),
+                  borderLeftColor: taskColor(t.color),
+                  touchAction: "none",
+                  opacity: isDragging ? 0.85 : 1,
+                  zIndex: isDragging ? 6 : 2,
                 }}
               >
+                <span className="font-plex-mono text-[10.5px] text-[#9AA0A3]">
+                  {minToTime(top)} – {minToTime(top + dur)}
+                </span>
                 <span
-                  className="size-1.5 rounded-full"
-                  style={{ background: taskColor("coral") }}
-                />
-                <span
-                  className="size-1.5 rounded-full opacity-60"
-                  style={{ background: taskColor("coral") }}
-                />
-                <span
-                  className="size-1.5 rounded-full opacity-30"
-                  style={{ background: taskColor("coral") }}
-                />
-              </span>
-              <span className="text-[15px] font-medium text-[#D7DADA]">
-                Ongestructureerde gedachten
-              </span>
-              <span className="max-w-[260px] text-center text-[12.5px] leading-[1.55] text-[#6C7377]">
-                Vang taken en gedachten zodra ze opkomen. Verplaats ze naar je
-                tijdlijn wanneer je klaar bent om te plannen.
-              </span>
-            </div>
-          ) : (
-            <div className="mt-2.5">
-              {inbox.map((item) => (
-                <div
-                  key={item.id}
-                  className="flex items-center gap-3 border-b border-white/5 px-0.5 py-3"
+                  className="truncate text-sm font-semibold"
+                  style={{
+                    color: done ? "#565C60" : "#E9EBEA",
+                    textDecoration: done ? "line-through" : "none",
+                  }}
                 >
-                  <span
-                    className="size-2 flex-none rounded-full"
-                    style={{ background: taskColor(item.color) }}
-                  />
-                  <span className="flex-1 text-sm text-[#D7DADA]">
-                    {item.title}
-                  </span>
-                  <button
-                    type="button"
-                    onClick={() =>
-                      openCreate({
-                        taskId: item.id,
-                        title: item.title,
-                        color: item.color,
-                      })
-                    }
-                    className="font-plex-mono rounded-2xl border border-white/15 bg-transparent px-3.5 py-[7px] text-[11px] text-[#9AA0A3] transition active:scale-95"
-                  >
-                    inplannen
-                  </button>
+                  {t.title}
+                </span>
+                <button
+                  type="button"
+                  onPointerDown={(e) => e.stopPropagation()}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    void toggleComplete(t);
+                  }}
+                  aria-label={done ? "Afvinken ongedaan maken" : "Afvinken"}
+                  className="absolute top-[7px] right-[7px] flex size-[22px] items-center justify-center rounded-full border-[1.5px] text-[11px] font-semibold text-[#0B0C0D] transition-colors"
+                  style={{
+                    borderColor: taskColor(t.color),
+                    background: done ? taskColor(t.color) : "transparent",
+                  }}
+                >
+                  {done ? "✓" : ""}
+                </button>
+                {/* Resize-handle: onderkant slepen om de duur aan te passen */}
+                <div
+                  onPointerDown={(e) => onResizePointerDown(e, t)}
+                  onPointerMove={(e) => onResizePointerMove(e, t)}
+                  onPointerUp={(e) => onResizePointerUp(e, t)}
+                  onPointerCancel={(e) => onResizePointerUp(e, t)}
+                  style={{ touchAction: "none" }}
+                  className="absolute inset-x-0 bottom-0 flex h-3.5 cursor-row-resize items-end justify-center pb-[3px]"
+                >
+                  <span className="h-[3px] w-6 rounded-full bg-white/25" />
                 </div>
-              ))}
-            </div>
-          )}
+              </div>
+            );
+          })}
         </div>
-      )}
+      </div>
 
-      {/* --- Instellingen (placeholder) --- */}
-      {planTab === "instellingen" && (
-        <div className="flex flex-1 items-center justify-center">
-          <span className="font-plex-mono text-xs text-[#3E4448]">
-            instellingen — volgt later
-          </span>
-        </div>
-      )}
+      {/* Inbox-strook: ongestructureerde gedachten, los van de dagplanning */}
+      <InboxStrip
+        items={inboxItems}
+        value={inboxValue}
+        onValueChange={setInboxValue}
+        onSubmit={() => void addInboxItem()}
+        expanded={inboxExpanded}
+        onToggleExpanded={() => setInboxExpanded((v) => !v)}
+        onDelete={(id) => void removeInboxItem(id)}
+      />
 
       <BottomNav />
 
       {sheet && (
         <TaskSheet
           sheet={sheet}
-          today={todayIso}
           onClose={() => setSheet(null)}
           onPatch={patchSheet}
-          onSave={saveSheet}
-          onDelete={deleteFromSheet}
+          onSave={() => void saveSheet()}
+          onDelete={() => void deleteFromSheet()}
         />
       )}
     </main>
   );
-
-  function shiftWeek(days: number) {
-    const d = new Date(sel);
-    d.setDate(d.getDate() + days);
-    setSelDate(isoDate(d));
-  }
-
-  function onGridClick(e: React.MouseEvent<HTMLDivElement>) {
-    const rect = e.currentTarget.getBoundingClientRect();
-    const y = e.clientY - rect.top;
-    const raw = Math.round(y / MINUTE_PX / 15) * 15;
-    const clamped = Math.max(0, Math.min(1425, raw));
-    const p = (n: number) => String(n).padStart(2, "0");
-    openCreate({ time: `${p(Math.floor(clamped / 60))}:${p(clamped % 60)}` });
-  }
 }
