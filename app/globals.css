@@ -75,6 +75,20 @@ body {
   }
 }
 
+/* Inzoom van het emotie-rooster (laag 2). Puur CSS zodat React-re-renders de
+   animatie niet halverwege kunnen onderbreken. --intro-s = startschaal
+   (afgeleid van de aangetikte kwadrant-knop), transform-origin staat inline. */
+@keyframes introZoom {
+  from {
+    transform: scale(var(--intro-s, 0.2));
+    opacity: 0;
+  }
+  to {
+    transform: none;
+    opacity: 1;
+  }
+}
+
 /* Bottom-sheet van de taak-editor (uit het Claude Design-prototype). */
 @keyframes sheetup {
   from {

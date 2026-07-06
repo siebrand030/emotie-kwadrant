@@ -4,9 +4,9 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   animate,
   motion,
+  motionValue,
   useMotionValue,
-  useTransform,
-  type MotionValue,
+  useMotionValueEvent,
 } from "framer-motion";
 import type { Quadrant } from "@/lib/supabase/types";
 import {
@@ -25,11 +25,8 @@ const CELLS = emotionGridPositions();
 const GAP = 14;
 const CONTENT_OFFSET = 900; // overscan van de drag-hit-catcher; valt algebraïsch weg
 // Zachte, kritisch gedempte veer (damping ≈ 2·√stiffness) — landt vloeiend op
-// het midden zonder doorschieten of "yank".
+// het midden zonder doorschieten.
 const LOCK_SPRING = { type: "spring", stiffness: 420, damping: 40 } as const;
-
-const clamp = (v: number, lo: number, hi: number) =>
-  Math.min(hi, Math.max(lo, v));
 
 interface Metrics {
   cellW: number;
@@ -76,13 +73,11 @@ export function EmotionGrid({
   onSelect,
 }: EmotionGridProps) {
   const wrapperRef = useRef<HTMLDivElement>(null);
-  // frameRect is de rect van <main> (het app-frame), niet het browservenster
-  // — op desktop staat dat frame gecentreerd en smaller (mx-auto max-w-md).
+  const planeRef = useRef<HTMLDivElement>(null);
+  // Gecachete cel-nodes in CELLS-volgorde (DOM-volgorde == render-volgorde).
+  const cellNodes = useRef<HTMLElement[] | null>(null);
+
   const [size, setSize] = useState(() => ({ w: frameRect.width, h: frameRect.height }));
-  // Terwijl er actief gesleept wordt geen resize-reflow doorlaten: op mobiel
-  // klapt de adresbalk soms in/uit → de wrapper verandert van hoogte → de
-  // drag-constraints zouden herberekend worden en het rooster met een ruk in
-  // de nieuwe grenzen worden getrokken (voelde aan als willekeurig "slurpen").
   const interacting = useRef(false);
 
   useEffect(() => {
@@ -100,6 +95,10 @@ export function EmotionGrid({
   }, []);
 
   const metrics = useMemo(() => computeMetrics(size.w), [size.w]);
+  // Metrics via ref zodat de meet-functie stabiel blijft (geen re-creatie →
+  // geen effect-loops).
+  const metricsRef = useRef(metrics);
+  metricsRef.current = metrics;
 
   const centerOffsetFor = useCallback(
     (col: number, row: number) => {
@@ -121,75 +120,142 @@ export function EmotionGrid({
   const x = useMotionValue(initialOffset.x);
   const y = useMotionValue(initialOffset.y);
   const [selected, setSelected] = useState(initialCell.name);
+  const focusName = useRef(initialCell.name);
+  // Pas meten zodra de intro-zoom klaar is. Tijdens de zoom staat het rooster
+  // klein én verschoven (groeit vanuit de knop), dus een meting zou daar de
+  // verkeerde "gecentreerde" cel vinden én met een re-render de animatie
+  // kunnen verstoren.
+  const ready = useRef(false);
 
-  // Welke cel ligt op dit moment het dichtst bij het midden van het viewport?
-  // (Puur uit de huidige x/y afgeleid — geen momentum, dus dit ís waar je nu
-  // staat, niet waar een fling je heen gooit.)
-  const nearestCell = useCallback((): EmotionCellPos | undefined => {
-    const targetContentX = size.w / 2 - x.get();
-    const targetContentY = size.h / 2 - y.get();
-    const col = clamp(
-      Math.round((targetContentX - metrics.cellW / 2) / metrics.pitchX),
-      0,
-      3,
-    );
-    const row = clamp(
-      Math.round((targetContentY - metrics.cellH / 2) / metrics.pitchY),
-      0,
-      3,
-    );
-    return CELLS.find((c) => c.col === col && c.row === row);
-  }, [metrics, size, x, y]);
-
-  // Zet de selectie + snapt exact naar het midden (gedeeld door tik + loslaten).
-  const lockCell = useCallback(
-    (cell: EmotionCellPos) => {
-      setSelected(cell.name);
-      const target = centerOffsetFor(cell.col, cell.row);
-      animate(x, target.x, LOCK_SPRING);
-      animate(y, target.y, LOCK_SPRING);
-    },
-    [centerOffsetFor, x, y],
+  // Per-cel schaal/opaciteit als losse motion values (één keer aangemaakt).
+  // Worden imperatief gezet vanuit de meet-lus, dus geen React re-render/frame.
+  const cellMV = useMemo(
+    () => CELLS.map(() => ({ scale: motionValue(1), opacity: motionValue(1) })),
+    [],
   );
 
-  // Tijdens het slepen: laat het label meelopen met de cel die nu het dichtst
-  // bij het midden ligt — puur visueel, verplaatst het rooster niet.
-  const trackNearest = useCallback(() => {
-    const cell = nearestCell();
-    if (cell) setSelected((prev) => (prev === cell.name ? prev : cell.name));
-  }, [nearestCell]);
-
-  // Bij loslaten: land netjes op de cel die op dát moment voor je neus staat.
-  const snapToNearest = useCallback(() => {
-    interacting.current = false;
-    const cell = nearestCell();
-    if (cell) lockCell(cell);
-  }, [nearestCell, lockCell]);
-
-  // Direct tikken op een vakje selecteert + centreert het meteen. Zit op de
-  // drag-hit-catcher zelf (niet op losse cellen) omdat Framer tap+drag alleen
-  // betrouwbaar op hetzelfde element arbitreert.
-  const handleGridTap = useCallback(
-    (_event: unknown, info: { point: { x: number; y: number } }) => {
-      const el = wrapperRef.current;
-      if (!el) return;
-      const rect = el.getBoundingClientRect();
-      const contentX = info.point.x - rect.left - x.get();
-      const contentY = info.point.y - rect.top - y.get();
-      const col = clamp(
-        Math.round((contentX - metrics.cellW / 2) / metrics.pitchX),
-        0,
-        3,
+  // DE KERN: meet uit de DOM welke cel écht het dichtst bij het scherm-midden
+  // staat, en zet daar focus + schaal/opaciteit op. Puur wat op het scherm
+  // staat — geen size/x/y-wiskunde, kan dus niet desyncen met wat je ziet.
+  // Stabiel (leest alles uit refs), zodat het geen render-loops veroorzaakt.
+  const measure = useCallback(() => {
+    if (!ready.current) return;
+    const wrap = wrapperRef.current;
+    const plane = planeRef.current;
+    if (!wrap || !plane) return;
+    if (!cellNodes.current) {
+      cellNodes.current = Array.from(
+        plane.querySelectorAll<HTMLElement>("[data-name]"),
       );
-      const row = clamp(
-        Math.round((contentY - metrics.cellH / 2) / metrics.pitchY),
-        0,
-        3,
+    }
+    const nodes = cellNodes.current;
+    if (nodes.length !== CELLS.length) return;
+
+    const wr = wrap.getBoundingClientRect();
+    const wcx = wr.left + wr.width / 2;
+    const wcy = wr.top + wr.height / 2;
+    const m = metricsRef.current;
+    const falloff = Math.max(m.pitchX, m.pitchY);
+
+    let bestI = 0;
+    let bestD = Infinity;
+    const dists = new Array<number>(nodes.length);
+    for (let i = 0; i < nodes.length; i++) {
+      const r = nodes[i].getBoundingClientRect();
+      const d = Math.hypot(
+        r.left + r.width / 2 - wcx,
+        r.top + r.height / 2 - wcy,
       );
-      const cell = CELLS.find((c) => c.col === col && c.row === row);
-      if (cell) lockCell(cell);
+      dists[i] = d;
+      if (d < bestD) {
+        bestD = d;
+        bestI = i;
+      }
+    }
+    for (let i = 0; i < nodes.length; i++) {
+      const t = Math.min(1, dists[i] / falloff);
+      cellMV[i].scale.set(1 - t * 0.28);
+      cellMV[i].opacity.set(1 - t * 0.65);
+    }
+    const name = CELLS[bestI].name;
+    if (name !== focusName.current) {
+      focusName.current = name;
+      setSelected(name);
+    }
+  }, [cellMV]);
+
+  // Meet mee terwijl het rooster beweegt (drag + snap-animatie).
+  useMotionValueEvent(x, "change", measure);
+  useMotionValueEvent(y, "change", measure);
+
+  // Zet "ready" en doe de eerste meting zodra de intro-zoom klaar is. De
+  // primaire trigger is onAnimationComplete; de timeout is een vangnet mocht
+  // die ooit niet vuren.
+  const markReady = useCallback(() => {
+    if (ready.current) return;
+    ready.current = true;
+    measure();
+  }, [measure]);
+
+  useEffect(() => {
+    const id = setTimeout(markReady, 420);
+    return () => clearTimeout(id);
+  }, [markReady]);
+
+  // Effectieve schaal van het rooster op het scherm (intro-zoom zet 'm even
+  // op < 1; daarna 1). Nodig om een gemeten visuele verschuiving terug te
+  // rekenen naar de translate-eenheid van het vlak.
+  const planeScale = useCallback(() => {
+    const w = wrapperRef.current;
+    if (!w || typeof window === "undefined") return 1;
+    try {
+      return new DOMMatrixReadOnly(getComputedStyle(w).transform).a || 1;
+    } catch {
+      return 1;
+    }
+  }, []);
+
+  const snapNodeToCenter = useCallback(
+    (node: HTMLElement) => {
+      const wrap = wrapperRef.current;
+      if (!wrap) return;
+      const wr = wrap.getBoundingClientRect();
+      const r = node.getBoundingClientRect();
+      const s = planeScale();
+      const dvx = wr.left + wr.width / 2 - (r.left + r.width / 2);
+      const dvy = wr.top + wr.height / 2 - (r.top + r.height / 2);
+      animate(x, x.get() + dvx / s, LOCK_SPRING);
+      animate(y, y.get() + dvy / s, LOCK_SPRING);
     },
-    [lockCell, metrics, x, y],
+    [planeScale, x, y],
+  );
+
+  const nodeFor = useCallback((name: string) => {
+    const idx = CELLS.findIndex((c) => c.name === name);
+    return cellNodes.current?.[idx] ?? null;
+  }, []);
+
+  // Loslaten: land op de cel die op dat moment in het midden staat (DOM).
+  const snapToFocused = useCallback(() => {
+    interacting.current = false;
+    const node = nodeFor(focusName.current);
+    if (node) snapNodeToCenter(node);
+  }, [nodeFor, snapNodeToCenter]);
+
+  // Directe tik op een vakje: pak precies dát vakje (elementFromPoint) en
+  // centreer het.
+  const handleTap = useCallback(
+    (_event: unknown, info: { point: { x: number; y: number } }) => {
+      const target = document
+        .elementFromPoint(info.point.x, info.point.y)
+        ?.closest<HTMLElement>("[data-name]");
+      if (!target) return;
+      const name = target.getAttribute("data-name")!;
+      focusName.current = name;
+      setSelected(name);
+      snapNodeToCenter(target);
+    },
+    [snapNodeToCenter],
   );
 
   const dragConstraints = useMemo(
@@ -202,14 +268,10 @@ export function EmotionGrid({
     [centerOffsetFor],
   );
 
-  const falloffRadius = Math.max(metrics.pitchX, metrics.pitchY);
-
   const introOrigin = useMemo(() => {
     if (!originRect) {
       return { originXPct: 50, originYPct: 40, initialScale: 0.2 };
     }
-    // transform-origin is relatief aan de eigen box van de wrapper (== het
-    // app-frame), dus tegen frameRect afzetten — niet tegen het venster.
     const cx = originRect.left + originRect.width / 2 - frameRect.left;
     const cy = originRect.top + originRect.height / 2 - frameRect.top;
     const rawScale = Math.max(
@@ -227,16 +289,18 @@ export function EmotionGrid({
     CELLS.find((c) => c.name === selected)?.quadrant ?? initialQuadrant;
 
   return (
-    <motion.div
+    <div
       ref={wrapperRef}
       className="absolute inset-0 z-[5] overflow-hidden bg-[#0B0C0D]"
       style={{
         transformOrigin: `${introOrigin.originXPct}% ${introOrigin.originYPct}%`,
         overscrollBehavior: "contain",
+        // Pure-CSS inzoom (zie @keyframes introZoom) — immuun voor React
+        // re-renders die een Framer-animatie zouden onderbreken.
+        ["--intro-s" as string]: introOrigin.initialScale,
+        animation: "introZoom 0.36s cubic-bezier(0.19,1,0.22,1) both",
       }}
-      initial={{ scale: introOrigin.initialScale, opacity: 0, borderRadius: 9999 }}
-      animate={{ scale: 1, opacity: 1, borderRadius: 0 }}
-      transition={{ duration: 0.36, ease: [0.19, 1, 0.22, 1] }}
+      onAnimationEnd={markReady}
     >
       <button
         onClick={onBack}
@@ -246,6 +310,7 @@ export function EmotionGrid({
       </button>
 
       <motion.div
+        ref={planeRef}
         className="absolute"
         style={{
           left: -CONTENT_OFFSET,
@@ -257,32 +322,39 @@ export function EmotionGrid({
           touchAction: "none",
         }}
         drag
-        // Geen momentum: het rooster volgt de vinger 1-op-1 en stopt waar je
-        // loslaat — daarna landt snapToNearest netjes op de dichtstbijzijnde
-        // cel. Momentum gooide het rooster eerder meerdere cellen door.
         dragMomentum={false}
         dragElastic={0.06}
         dragConstraints={dragConstraints}
         onDragStart={() => {
           interacting.current = true;
+          markReady();
         }}
-        onDrag={trackNearest}
-        onDragEnd={snapToNearest}
-        onTap={handleGridTap}
+        onDragEnd={snapToFocused}
+        onTap={handleTap}
       >
-        {CELLS.map((cell) => (
-          <EmotionCell
-            key={cell.name}
-            cell={cell}
-            metrics={metrics}
-            containerW={size.w}
-            containerH={size.h}
-            x={x}
-            y={y}
-            falloffRadius={falloffRadius}
-            contentOffset={CONTENT_OFFSET}
-          />
-        ))}
+        {CELLS.map((cell, i) => {
+          const hue = quadrantDef(cell.quadrant).hue;
+          return (
+            <motion.div
+              key={cell.name}
+              data-name={cell.name}
+              className="absolute flex items-center justify-center rounded-[22px] p-3 text-center text-[15px] font-medium leading-[1.25]"
+              style={{
+                left: CONTENT_OFFSET + cell.col * metrics.pitchX,
+                top: CONTENT_OFFSET + cell.row * metrics.pitchY,
+                width: metrics.cellW,
+                height: metrics.cellH,
+                scale: cellMV[i].scale,
+                opacity: cellMV[i].opacity,
+                background: quadrantBg(hue, 0.09),
+                border: `1px solid ${quadrantLine(hue)}`,
+                color: colorForKey(cell.quadrant),
+              }}
+            >
+              {cell.name}
+            </motion.div>
+          );
+        })}
       </motion.div>
 
       <button
@@ -292,67 +364,6 @@ export function EmotionGrid({
       >
         {selected} · verder
       </button>
-    </motion.div>
-  );
-}
-
-interface EmotionCellProps {
-  cell: EmotionCellPos;
-  metrics: Metrics;
-  containerW: number;
-  containerH: number;
-  x: MotionValue<number>;
-  y: MotionValue<number>;
-  falloffRadius: number;
-  contentOffset: number;
-}
-
-function EmotionCell({
-  cell,
-  metrics,
-  containerW,
-  containerH,
-  x,
-  y,
-  falloffRadius,
-  contentOffset,
-}: EmotionCellProps) {
-  const cellCenterX = cell.col * metrics.pitchX + metrics.cellW / 2;
-  const cellCenterY = cell.row * metrics.pitchY + metrics.cellH / 2;
-
-  const distance = useCallback(
-    (xv: number, yv: number) =>
-      Math.hypot(xv + cellCenterX - containerW / 2, yv + cellCenterY - containerH / 2),
-    [cellCenterX, cellCenterY, containerW, containerH],
-  );
-
-  const scale = useTransform([x, y], ([xv, yv]: number[]) => {
-    const t = Math.min(1, distance(xv, yv) / falloffRadius);
-    return 1 - t * 0.28;
-  });
-  const opacity = useTransform([x, y], ([xv, yv]: number[]) => {
-    const t = Math.min(1, distance(xv, yv) / falloffRadius);
-    return 1 - t * 0.65;
-  });
-
-  const hue = quadrantDef(cell.quadrant).hue;
-
-  return (
-    <motion.div
-      className="absolute flex items-center justify-center rounded-[22px] p-3 text-center text-[15px] font-medium leading-[1.25]"
-      style={{
-        left: contentOffset + cell.col * metrics.pitchX,
-        top: contentOffset + cell.row * metrics.pitchY,
-        width: metrics.cellW,
-        height: metrics.cellH,
-        scale,
-        opacity,
-        background: quadrantBg(hue, 0.09),
-        border: `1px solid ${quadrantLine(hue)}`,
-        color: colorForKey(cell.quadrant),
-      }}
-    >
-      {cell.name}
-    </motion.div>
+    </div>
   );
 }
