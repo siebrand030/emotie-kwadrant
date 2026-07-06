@@ -2,13 +2,8 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
-import {
-  TASK_COLORS,
-  type DailyPlan,
-  type InboxItem,
-  type PlanItem,
-} from "@/lib/supabase/types";
-import { taskColor, taskColorMix } from "@/lib/task-colors";
+import type { DailyPlan, InboxItem, PlanItem } from "@/lib/supabase/types";
+import { sourceColor, taskColor, taskColorMix } from "@/lib/task-colors";
 import {
   clampMinutesOfDay,
   isoDate,
@@ -56,7 +51,7 @@ type DragState =
       itemId: string;
       pointerId: number;
       title: string;
-      color: PlanItem["color"];
+      source: PlanItem["source"];
       x: number;
       y: number;
       overGrid: boolean;
@@ -166,12 +161,11 @@ export function PlannerApp({
     label: String(h).padStart(2, "0") + ":00",
   }));
 
-  // ---- braindump: aanmaken ----
+  // ---- braindump: aanmaken (altijd source 'planned') ----
   async function addBraindumpLine() {
     const title = braindumpText.trim();
     if (!title) return;
     setBraindumpText("");
-    const color = TASK_COLORS[unscheduled.length % TASK_COLORS.length];
     const sortOrder = unscheduled.length;
     const tempId = "temp-" + Date.now();
     const optimistic: PlanItem = {
@@ -184,21 +178,14 @@ export function PlannerApp({
       planned_start_time: null,
       planned_duration_minutes: null,
       sort_order: sortOrder,
-      color,
+      source: "planned",
       completed: false,
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
     };
     setItems((cur) => [...cur, optimistic]);
     try {
-      const row = await createBraindumpItem(
-        supabase,
-        userId,
-        dailyPlan.id,
-        title,
-        color,
-        sortOrder,
-      );
+      const row = await createBraindumpItem(supabase, userId, dailyPlan.id, title, sortOrder);
       setItems((cur) => cur.map((i) => (i.id === tempId ? row : i)));
     } catch (e) {
       console.error("Braindump-item toevoegen mislukt:", e);
@@ -215,7 +202,7 @@ export function PlannerApp({
       itemId: item.id,
       pointerId: e.pointerId,
       title: item.title,
-      color: item.color,
+      source: item.source,
       x: e.clientX,
       y: e.clientY,
       overGrid: false,
@@ -424,7 +411,7 @@ export function PlannerApp({
       start: normalizeTime(item.planned_start_time) ?? "09:00",
       dur: item.planned_duration_minutes ?? DEFAULT_DURATION,
       note: item.notes ?? "",
-      color: item.color,
+      source: item.source,
     });
   }
 
@@ -436,7 +423,7 @@ export function PlannerApp({
       start: minToTime(startMin),
       dur: DEFAULT_DURATION,
       note: "",
-      color: TASK_COLORS[items.length % TASK_COLORS.length],
+      source: "adhoc",
     });
   }
 
@@ -460,7 +447,7 @@ export function PlannerApp({
         planned_start_time: s.start,
         planned_duration_minutes: s.dur,
         sort_order: 0,
-        color: s.color,
+        source: "adhoc",
         completed: false,
         created_at: new Date().toISOString(),
         updated_at: new Date().toISOString(),
@@ -472,7 +459,6 @@ export function PlannerApp({
           notes: optimistic.notes,
           planned_start_time: s.start,
           planned_duration_minutes: s.dur,
-          color: s.color,
         });
         setItems((cur) => cur.map((i) => (i.id === tempId ? row : i)));
       } catch (e) {
@@ -704,11 +690,11 @@ export function PlannerApp({
             >
               <div
                 className="border-t-2 border-dashed"
-                style={{ borderColor: taskColor(drag.color) }}
+                style={{ borderColor: taskColor(sourceColor(drag.source)) }}
               />
               <span
                 className="font-plex-mono absolute top-1 left-0 text-[10px]"
-                style={{ color: taskColor(drag.color) }}
+                style={{ color: taskColor(sourceColor(drag.source)) }}
               >
                 {minToTime(drag.previewMin)} · {drag.title}
               </span>
@@ -725,6 +711,7 @@ export function PlannerApp({
             const { top, dur } = blockGeometry(t);
             const height = Math.max(dur * MINUTE_PX, 44);
             const done = t.completed;
+            const color = sourceColor(t.source);
             const isDragging =
               drag != null && drag.kind !== "braindump" && drag.itemId === t.id;
             return (
@@ -738,9 +725,9 @@ export function PlannerApp({
                 style={{
                   top: `${top}px`,
                   height: `${height}px`,
-                  background: taskColorMix(t.color, 14),
-                  borderColor: taskColorMix(t.color, 32),
-                  borderLeftColor: taskColor(t.color),
+                  background: taskColorMix(color, 14),
+                  borderColor: taskColorMix(color, 32),
+                  borderLeftColor: taskColor(color),
                   touchAction: "none",
                   opacity: isDragging ? 0.85 : 1,
                   zIndex: isDragging ? 6 : 2,
@@ -768,8 +755,8 @@ export function PlannerApp({
                   aria-label={done ? "Afvinken ongedaan maken" : "Afvinken"}
                   className="absolute top-[7px] right-[7px] flex size-[22px] items-center justify-center rounded-full border-[1.5px] text-[11px] font-semibold text-[#0B0C0D] transition-colors"
                   style={{
-                    borderColor: taskColor(t.color),
-                    background: done ? taskColor(t.color) : "transparent",
+                    borderColor: taskColor(color),
+                    background: done ? taskColor(color) : "transparent",
                   }}
                 >
                   {done ? "✓" : ""}

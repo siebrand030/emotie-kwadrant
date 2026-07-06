@@ -1,14 +1,17 @@
 "use client";
 
-import { taskColor, taskColorMix } from "@/lib/task-colors";
+import { sourceColor, taskColor, taskColorMix } from "@/lib/task-colors";
 import { addMin, fmtDur } from "@/lib/planner-time";
-import type { TaskColor } from "@/lib/supabase/types";
+import type { PlanItemSource } from "@/lib/supabase/types";
 
 /**
  * Sheet-staat: "create" bij een nieuw item (tik op een leeg tijdstip op de
  * tijdlijn), "edit" bij een al bestaand item (tik op een blok). Alleen in
  * create-mode krijgt het titelveld autofocus/toetsenbord — bij edit wil je
  * niet dat tikken op een blok meteen het toetsenbord opent.
+ *
+ * `source` bepaalt (via sourceColor) de accentkleur; niet los instelbaar —
+ * kleur is herkomst, geen vrije keuze.
  */
 export interface SheetState {
   mode: "create" | "edit";
@@ -17,7 +20,7 @@ export interface SheetState {
   start: string; // HH:MM
   dur: number; // minuten
   note: string;
-  color: TaskColor;
+  source: PlanItemSource;
 }
 
 const DURATION_CHIPS = [
@@ -38,7 +41,8 @@ interface TaskSheetProps {
 }
 
 export function TaskSheet({ sheet, onClose, onPatch, onSave, onDelete }: TaskSheetProps) {
-  const accent = taskColor(sheet.color);
+  const color = sourceColor(sheet.source);
+  const accent = taskColor(color);
   const end = addMin(sheet.start, sheet.dur);
   const canSave = sheet.title.trim().length > 0;
 
@@ -55,8 +59,8 @@ export function TaskSheet({ sheet, onClose, onPatch, onSave, onDelete }: TaskShe
         <div
           className="mb-5 flex flex-col gap-1.5 rounded-2xl border p-4"
           style={{
-            background: taskColorMix(sheet.color, 13),
-            borderColor: taskColorMix(sheet.color, 30),
+            background: taskColorMix(color, 13),
+            borderColor: taskColorMix(color, 30),
           }}
         >
           <span className="font-plex-mono text-[11px]" style={{ color: accent }}>

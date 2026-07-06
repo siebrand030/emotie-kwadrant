@@ -1,4 +1,4 @@
-import type { Database, PlanItem, TaskColor } from "./supabase/types";
+import type { Database, PlanItem } from "./supabase/types";
 import type { createClient } from "./supabase/client";
 
 /**
@@ -39,13 +39,12 @@ export async function fetchPlanItems(
   return data ?? [];
 }
 
-/** Nieuw braindump-item (nog niet ingepland). */
+/** Nieuw braindump-item (nog niet ingepland). Altijd source 'planned'. */
 export async function createBraindumpItem(
   supabase: Supabase,
   userId: string,
   dailyPlanId: string,
   title: string,
-  color: TaskColor,
   sortOrder: number,
 ): Promise<PlanItem> {
   const { data, error } = await typed(supabase)
@@ -55,7 +54,7 @@ export async function createBraindumpItem(
       daily_plan_id: dailyPlanId,
       title,
       status: "unscheduled",
-      color,
+      source: "planned",
       sort_order: sortOrder,
     })
     .select("*")
@@ -64,7 +63,10 @@ export async function createBraindumpItem(
   return data;
 }
 
-/** Nieuw, meteen ingepland item (tik-op-tijdstip-om-aan-te-maken). */
+/**
+ * Nieuw, meteen ingepland item (tik-op-tijdstip-om-aan-te-maken). Altijd
+ * source 'adhoc' — het komt niet uit de braindump-planning.
+ */
 export async function createScheduledItem(
   supabase: Supabase,
   userId: string,
@@ -74,7 +76,6 @@ export async function createScheduledItem(
     notes: string | null;
     planned_start_time: string;
     planned_duration_minutes: number;
-    color: TaskColor;
   },
 ): Promise<PlanItem> {
   const { data, error } = await typed(supabase)
@@ -83,6 +84,7 @@ export async function createScheduledItem(
       user_id: userId,
       daily_plan_id: dailyPlanId,
       status: "scheduled",
+      source: "adhoc",
       ...input,
     })
     .select("*")

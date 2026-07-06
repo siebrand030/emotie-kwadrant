@@ -1,6 +1,6 @@
 "use client";
 
-import { taskColor } from "@/lib/task-colors";
+import { sourceColor, taskColor } from "@/lib/task-colors";
 import type { PlanItem } from "@/lib/supabase/types";
 
 /**
@@ -43,7 +43,7 @@ export function BraindumpList({
           <span className="font-plex-mono text-[13px] text-[#565C60]">⠿</span>
           <span
             className="size-2 flex-none rounded-full"
-            style={{ background: taskColor(item.color) }}
+            style={{ background: taskColor(sourceColor(item.source)) }}
           />
           <span className="flex-1 truncate text-[13.5px] text-[#D7DADA]">
             {item.title}
