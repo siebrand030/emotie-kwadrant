@@ -70,8 +70,8 @@ app/                    Next.js App Router
   layout.tsx            root-layout + PWA-metadata
   globals.css           Tailwind + design-tokens (OKLCH-kwadrantkleuren)
   page.tsx              landing / navigatie
-  login/page.tsx        /login — magic link (signInWithOtp)
-  auth/callback/route.ts  wisselt de magic-link-code om voor een sessie
+  login/page.tsx        /login — e-mail + wachtwoord (signInWithPassword / signUp)
+  auth/callback/route.ts  wisselt de bevestigings-code om voor een sessie
   planner/page.tsx      /planner — dag-tijdlijn (beschermd)
   inbox/page.tsx        /inbox   — ongeplande taken (beschermd)
 components/planner/     dagplanner-componenten (timeline, inbox-list, …)
@@ -85,18 +85,29 @@ legacy/                 originele vanilla-JS PWA (referentie voor migratie)
 
 ## Authenticatie
 
-Magic-link login via Supabase Auth (`@supabase/ssr`):
+E-mail + wachtwoord login via Supabase Auth (`@supabase/ssr`):
 
-- `/login` roept `signInWithOtp` aan met `emailRedirectTo` → `/auth/callback`.
+- `/login` heeft één formulier met een schakelaar tussen **inloggen**
+  (`signInWithPassword`) en **registreren** (`signUp`). Foutcodes van Supabase
+  worden vertaald naar Nederlandse meldingen (verkeerd wachtwoord, onbekend
+  account, bestaand account, zwak wachtwoord, rate limit).
+- De sessie wordt door de browser-client (`createBrowserClient`) in **cookies**
+  bewaard, niet in geheugen. Daardoor blijft de sessie behouden na een reload en
+  in PWA-/standalone-context op mobiel, en kan de middleware haar server-side
+  lezen.
 - `/auth/callback` wisselt de `code` (PKCE) om voor een sessie
-  (`exchangeCodeForSession`) en stuurt door naar `next` (default `/planner`).
+  (`exchangeCodeForSession`). Nog steeds nodig wanneer **e-mailbevestiging** in
+  Supabase aanstaat: `signUp` stuurt dan een bevestigingslink naar
+  `/auth/callback` en levert pas een sessie na bevestiging.
 - `middleware.ts` ververst de sessie op elke request en beschermt `/planner` en
   `/inbox`: niet-ingelogd → redirect naar `/login?next=<pad>`.
 - Uitloggen via `components/auth/sign-out-button.tsx` (`signOut` + redirect).
 
-Supabase-dashboard: zet onder **Authentication → URL Configuration** de redirect
-URL `http://localhost:3000/**` (en later de productie-URL) op de allowlist,
-anders weigert Supabase de magic-link-redirect.
+Supabase-dashboard: onder **Authentication → Providers → Email** staat of
+**Confirm email** aan/uit staat. Staat het uit, dan is een gebruiker na `signUp`
+meteen ingelogd; staat het aan, dan moet de bevestigingslink gevolgd worden. Zet
+onder **URL Configuration** de redirect URL `http://localhost:3000/**` (en later
+de productie-URL) op de allowlist voor die bevestigingslink.
 
 ## Commando's
 
